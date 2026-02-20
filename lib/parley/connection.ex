@@ -201,6 +201,9 @@ defmodule Parley.Connection do
 
   ## Private helpers
 
+  # Mint.HTTP.t() is opaque so Dialyzer can't prove Mint.WebSocket.new/4
+  # can return {:ok, ...} through the opaque boundary.
+  @dialyzer {:no_match, handle_upgrade_responses: 2}
   defp handle_upgrade_responses(data, responses) do
     data =
       Enum.reduce(responses, data, fn
@@ -263,21 +266,21 @@ defmodule Parley.Connection do
         data
 
       {:ping, payload}, data ->
-        case Mint.WebSocket.encode(data.websocket, {:pong, payload}) do
-          {:ok, websocket, encoded} ->
-            case Mint.WebSocket.stream_request_body(data.conn, data.request_ref, encoded) do
-              {:ok, conn} -> %{data | conn: conn, websocket: websocket}
-              {:error, _conn, _reason} -> data
-            end
-
-          {:error, _websocket, _reason} ->
-            data
-        end
+        send_pong(data, payload)
 
       frame, data ->
         {:ok, user_state} = data.module.handle_frame(frame, data.user_state)
         %{data | user_state: user_state}
     end)
+  end
+
+  defp send_pong(data, payload) do
+    with {:ok, websocket, encoded} <- Mint.WebSocket.encode(data.websocket, {:pong, payload}),
+         {:ok, conn} <- Mint.WebSocket.stream_request_body(data.conn, data.request_ref, encoded) do
+      %{data | conn: conn, websocket: websocket}
+    else
+      {:error, _, _} -> data
+    end
   end
 
   defp done?(responses), do: Enum.any?(responses, &match?({:done, _}, &1))
