@@ -14,36 +14,13 @@ defmodule Parley.Connection do
     resp_headers: []
   ]
 
-  ## Public API
-
-  def start_link(module, opts) do
-    {url, opts} = Keyword.pop!(opts, :url)
-    {state, opts} = Keyword.pop(opts, :state, nil)
-    {name, opts} = Keyword.pop(opts, :name)
-    init_arg = {module, url, state}
-
-    if name do
-      :gen_statem.start_link(name, __MODULE__, init_arg, opts)
-    else
-      :gen_statem.start_link(__MODULE__, init_arg, opts)
-    end
-  end
-
-  def send_frame(pid, frame) do
-    :gen_statem.call(pid, {:send, frame})
-  end
-
-  def disconnect(pid) do
-    :gen_statem.call(pid, :disconnect)
-  end
-
   ## gen_statem callbacks
 
   @impl true
   def callback_mode, do: [:state_functions, :state_enter]
 
   @impl true
-  def init({module, url, user_state}) do
+  def init({module, {url, user_state}}) do
     uri = URI.parse(url)
 
     data = %__MODULE__{
