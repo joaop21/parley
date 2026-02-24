@@ -42,6 +42,14 @@ defmodule Parley do
       Parley.send_frame(MyClient, {:text, "hello"})
       Parley.disconnect(MyClient)
 
+  ### Starting under a supervisor
+
+      children = [
+        {MyClient, {%{}, url: "wss://example.com/ws", name: MyClient}}
+      ]
+
+      Supervisor.start_link(children, strategy: :one_for_one)
+
   ## Name registration
 
   The `:name` option supports the same values as `GenServer`:
@@ -86,6 +94,15 @@ defmodule Parley do
       def handle_disconnect(_reason, state), do: {:ok, state}
 
       defoverridable handle_connect: 1, handle_frame: 2, handle_disconnect: 2
+
+      def child_spec({init_arg, opts}) do
+        %{
+          id: __MODULE__,
+          start: {__MODULE__, :start_link, [init_arg, opts]}
+        }
+      end
+
+      defoverridable child_spec: 1
 
       def start_link(init_arg, opts \\ []) do
         Parley.start_link(__MODULE__, init_arg, opts)

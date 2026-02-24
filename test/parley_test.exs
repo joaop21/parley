@@ -139,6 +139,44 @@ defmodule ParleyTest do
     end
   end
 
+  describe "child_spec/1" do
+    test "returns a valid child spec", %{url: url} do
+      spec = Client.child_spec({%{test_pid: self()}, url: url})
+
+      assert spec == %{
+               id: Client,
+               start: {Client, :start_link, [%{test_pid: self()}, [url: url]]}
+             }
+    end
+
+    test "can be started under a supervisor", %{url: url} do
+      children = [
+        {Client, {%{test_pid: self()}, url: url, name: :parley_supervised}}
+      ]
+
+      {:ok, sup} = Supervisor.start_link(children, strategy: :one_for_one)
+      assert_receive :connected, 1000
+
+      :ok = Parley.send_frame(:parley_supervised, {:text, "supervised"})
+      assert_receive {:frame, {:text, "supervised"}}, 1000
+
+      Supervisor.stop(sup)
+    end
+
+    test "child_spec is overridable" do
+      defmodule CustomSpecClient do
+        use Parley
+
+        def child_spec(_arg) do
+          %{id: :custom, start: {__MODULE__, :start_link, [%{}, []]}}
+        end
+      end
+
+      spec = CustomSpecClient.child_spec(:ignored)
+      assert spec.id == :custom
+    end
+  end
+
   describe "start/3" do
     test "starts process without link", %{url: url} do
       {:ok, pid} = Parley.start(Client, %{test_pid: self()}, url: url)
