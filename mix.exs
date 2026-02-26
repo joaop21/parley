@@ -40,8 +40,10 @@ defmodule Parley.MixProject do
 
   defp package do
     [
+      maintainers: ["João Silva"],
       licenses: ["MIT"],
-      links: %{"GitHub" => @source_url}
+      links: %{"Repository" => @source_url},
+      files: ~w(lib .formatter.exs mix.exs README.md LICENSE)
     ]
   end
 
@@ -49,7 +51,8 @@ defmodule Parley.MixProject do
     [
       main: "Parley",
       source_ref: "v#{@version}",
-      source_url: @source_url
+      source_url: @source_url,
+      extras: ["README.md", "LICENSE"]
     ]
   end
 
