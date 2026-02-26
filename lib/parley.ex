@@ -65,6 +65,41 @@ defmodule Parley do
     * `{:global, term}` — registered with `:global`
     * `{:via, module, term}` — registered with a custom registry
 
+  ## Connection lifecycle
+
+  The connection is managed as a state machine with three states:
+
+  ```mermaid
+  stateDiagram-v2
+      [*] --> disconnected: start_link/3
+
+      disconnected --> connecting: TCP connect + WebSocket upgrade
+
+      connecting --> connected: upgrade success
+      connecting --> disconnected: error / timeout
+
+      connected --> disconnected: error / close / disconnect/1
+
+      state connected {
+          [*] --> handle_connect
+          handle_connect --> waiting
+          waiting --> handle_frame: frame received
+          handle_frame --> waiting
+      }
+
+      state disconnected {
+          [*] --> handle_disconnect
+      }
+  ```
+
+  - **`disconnected`** — initial state. On process start, immediately attempts to connect.
+    Calls `c:handle_disconnect/2` when entering from another state.
+  - **`connecting`** — TCP connection established, waiting for the WebSocket upgrade
+    handshake to complete. Frames sent via `send_frame/2` during this state are
+    automatically queued and delivered once connected.
+  - **`connected`** — WebSocket upgrade complete. Calls `c:handle_connect/1` on entry,
+    then `c:handle_frame/2` for each frame received from the server.
+
   ## Callbacks
 
   All callbacks are optional and have default implementations that return
