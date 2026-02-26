@@ -98,15 +98,29 @@ defmodule ParleyTest do
       assert_receive {:EXIT, ^pid, {:error, _reason}}, 1000
     end
 
-    test "process stops when server drops the connection", %{url: url, server_pid: server_pid} do
+    test "server shutdown triggers handle_disconnect with remote close", %{
+      url: url,
+      server_pid: server_pid
+    } do
+      {:ok, pid} = Client.start_link(%{test_pid: self()}, url: url)
+      assert_receive :connected, 1000
+
+      Supervisor.stop(server_pid, :normal, 1000)
+      assert_receive {:disconnected, {:remote_close, _code, _reason}}, 1000
+
+      # Process stays alive in :disconnected state
+      assert Process.alive?(pid)
+      Parley.disconnect(pid)
+    end
+
+    test "server-initiated close triggers handle_disconnect with close reason", %{url: url} do
       Process.flag(:trap_exit, true)
 
       {:ok, pid} = Client.start_link(%{test_pid: self()}, url: url)
       assert_receive :connected, 1000
 
-      Supervisor.stop(server_pid, :normal, 1000)
-      assert_receive {:disconnected, :closed}, 1000
-      assert_receive {:EXIT, ^pid, {:error, _reason}}, 1000
+      :ok = Parley.send_frame(pid, {:text, "close"})
+      assert_receive {:disconnected, {:remote_close, 1000, "normal closure"}}, 1000
     end
   end
 

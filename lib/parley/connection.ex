@@ -11,7 +11,8 @@ defmodule Parley.Connection do
     :module,
     :user_state,
     status: nil,
-    resp_headers: []
+    resp_headers: [],
+    disconnect_reason: :closed
   ]
 
   ## gen_statem callbacks
@@ -39,7 +40,7 @@ defmodule Parley.Connection do
   end
 
   def disconnected(:enter, _old_state, data) do
-    {:ok, user_state} = data.module.handle_disconnect(:closed, data.user_state)
+    {:ok, user_state} = data.module.handle_disconnect(data.disconnect_reason, data.user_state)
 
     {:keep_state,
      %{
@@ -49,7 +50,8 @@ defmodule Parley.Connection do
          websocket: nil,
          request_ref: nil,
          status: nil,
-         resp_headers: []
+         resp_headers: [],
+         disconnect_reason: :closed
      }}
   end
 
@@ -218,41 +220,65 @@ defmodule Parley.Connection do
 
   defp handle_data_responses(data, responses) do
     Enum.reduce(responses, {:keep_state, data}, fn
-      {:data, _ref, raw}, {_action, data} ->
-        case Mint.WebSocket.decode(data.websocket, raw) do
-          {:ok, websocket, frames} ->
-            data = %{data | websocket: websocket}
-            data = process_frames(data, frames)
-            {:keep_state, data}
-
-          {:error, websocket, reason} ->
-            Mint.HTTP.close(data.conn)
-
-            {:next_state, :disconnected, %{data | websocket: websocket, conn: nil},
-             [{:next_event, :internal, {:connect_error, reason}}]}
-        end
+      {:data, _ref, raw}, {:keep_state, data} ->
+        decode_and_process(data, raw)
 
       _other, acc ->
         acc
     end)
     |> case do
       {:keep_state, data} -> {:keep_state, data}
+      {:next_state, state, data} -> {:next_state, state, data}
       {:next_state, state, data, actions} -> {:next_state, state, data, actions}
     end
   end
 
+  defp decode_and_process(data, raw) do
+    case Mint.WebSocket.decode(data.websocket, raw) do
+      {:ok, websocket, frames} ->
+        data = %{data | websocket: websocket}
+
+        case process_frames(data, frames) do
+          {:ok, data} ->
+            {:keep_state, data}
+
+          {:close, code, reason, data} ->
+            Mint.HTTP.close(data.conn)
+
+            {:next_state, :disconnected,
+             %{data | conn: nil, disconnect_reason: {:remote_close, code, reason}}}
+        end
+
+      {:error, websocket, reason} ->
+        Mint.HTTP.close(data.conn)
+
+        {:next_state, :disconnected, %{data | websocket: websocket, conn: nil},
+         [{:next_event, :internal, {:connect_error, reason}}]}
+    end
+  end
+
   defp process_frames(data, frames) do
-    Enum.reduce(frames, data, fn
-      {:close, _code, _reason}, data ->
-        data
+    Enum.reduce_while(frames, {:ok, data}, fn
+      {:close, code, reason}, {:ok, data} ->
+        data = send_close(data)
+        {:halt, {:close, code, reason, data}}
 
-      {:ping, payload}, data ->
-        send_pong(data, payload)
+      {:ping, payload}, {:ok, data} ->
+        {:cont, {:ok, send_pong(data, payload)}}
 
-      frame, data ->
+      frame, {:ok, data} ->
         {:ok, user_state} = data.module.handle_frame(frame, data.user_state)
-        %{data | user_state: user_state}
+        {:cont, {:ok, %{data | user_state: user_state}}}
     end)
+  end
+
+  defp send_close(data) do
+    with {:ok, websocket, encoded} <- Mint.WebSocket.encode(data.websocket, :close),
+         {:ok, conn} <- Mint.WebSocket.stream_request_body(data.conn, data.request_ref, encoded) do
+      %{data | conn: conn, websocket: websocket}
+    else
+      {:error, _, _} -> data
+    end
   end
 
   defp send_pong(data, payload) do
