@@ -42,7 +42,7 @@ defmodule Parley.MixProject do
     [
       maintainers: ["João Silva"],
       licenses: ["MIT"],
-      links: %{"Repository" => @source_url},
+      links: %{"Repository" => @source_url, "Documentation" => "https://hexdocs.pm/parley"},
       files: ~w(lib .formatter.exs mix.exs README.md LICENSE)
     ]
   end
@@ -52,7 +52,11 @@ defmodule Parley.MixProject do
       main: "Parley",
       source_ref: "v#{@version}",
       source_url: @source_url,
-      extras: ["README.md", "LICENSE"]
+      extras: ["README.md", "LICENSE"],
+      groups_for_docs: [
+        Connection: &(&1[:kind] == :function),
+        Callbacks: &(&1[:kind] == :callback)
+      ]
     ]
   end
 
