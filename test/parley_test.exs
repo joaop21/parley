@@ -123,6 +123,19 @@ defmodule ParleyTest do
       assert_receive {:disconnected, {:remote_close, 1000, "normal closure"}}, 1000
     end
 
+    test "abrupt TCP disconnect keeps process alive in disconnected state", %{url: url} do
+      {:ok, pid} = Client.start_link(%{test_pid: self()}, url: url)
+      assert_receive :connected, 1000
+
+      # Crash the server-side socket without sending a close frame
+      :ok = Parley.send_frame(pid, {:text, "crash"})
+      assert_receive {:disconnected, {:error, _reason}}, 1000
+
+      # Process stays alive in :disconnected state
+      assert Process.alive?(pid)
+      Parley.disconnect(pid)
+    end
+
     test "times out when server never completes the upgrade" do
       # Start a TCP server that accepts connections but never responds
       {:ok, listen} = :gen_tcp.listen(0, [:binary, active: false, reuseaddr: true])

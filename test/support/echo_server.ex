@@ -13,6 +13,10 @@ defmodule Parley.Test.EchoServer do
       {:stop, :normal, {1000, "normal closure"}, state}
     end
 
+    def handle_in({"crash", [opcode: :text]}, _state) do
+      Process.exit(self(), :kill)
+    end
+
     def handle_in({message, [opcode: :text]}, state) do
       {:reply, :ok, [{:text, message}], state}
     end
