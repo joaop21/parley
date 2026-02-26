@@ -128,8 +128,18 @@ defmodule Parley.Connection do
   ## :connected state
 
   def connected(:enter, :connecting, data) do
-    {:ok, user_state} = data.module.handle_connect(data.user_state)
-    {:keep_state, %{data | user_state: user_state}}
+    case data.module.handle_connect(data.user_state) do
+      {:ok, user_state} ->
+        {:keep_state, %{data | user_state: user_state}}
+
+      {:push, frame, user_state} ->
+        data = %{data | user_state: user_state}
+        {:keep_state, send_frame_internal(data, frame)}
+
+      {:stop, reason, user_state} ->
+        if data.conn, do: Mint.HTTP.close(data.conn)
+        {:stop, reason, %{data | user_state: user_state, conn: nil}}
+    end
   end
 
   def connected(:info, message, data) do
@@ -228,6 +238,7 @@ defmodule Parley.Connection do
     |> case do
       {:keep_state, data} -> {:keep_state, data}
       {:next_state, state, data} -> {:next_state, state, data}
+      {:stop, reason, data} -> {:stop, reason, data}
     end
   end
 
@@ -245,6 +256,10 @@ defmodule Parley.Connection do
 
             {:next_state, :disconnected,
              %{data | conn: nil, disconnect_reason: {:remote_close, code, reason}}}
+
+          {:stop, reason, data} ->
+            if data.conn, do: Mint.HTTP.close(data.conn)
+            {:stop, reason, %{data | conn: nil}}
         end
 
       {:error, websocket, reason} ->
@@ -263,26 +278,57 @@ defmodule Parley.Connection do
         {:cont, {:ok, send_pong(data, payload)}}
 
       frame, {:ok, data} ->
-        {:ok, user_state} = data.module.handle_frame(frame, data.user_state)
-        {:cont, {:ok, %{data | user_state: user_state}}}
+        case data.module.handle_frame(frame, data.user_state) do
+          {:ok, user_state} ->
+            {:cont, {:ok, %{data | user_state: user_state}}}
+
+          {:push, reply_frame, user_state} ->
+            data = %{data | user_state: user_state}
+            {:cont, {:ok, send_frame_internal(data, reply_frame)}}
+
+          {:stop, reason, user_state} ->
+            data = %{data | user_state: user_state}
+            {:halt, {:stop, reason, data}}
+        end
     end)
   end
 
+  defp send_frame_internal(data, frame) do
+    case Mint.WebSocket.encode(data.websocket, frame) do
+      {:ok, websocket, encoded} ->
+        case Mint.WebSocket.stream_request_body(data.conn, data.request_ref, encoded) do
+          {:ok, conn} -> %{data | conn: conn, websocket: websocket}
+          {:error, conn, _reason} -> %{data | conn: conn, websocket: websocket}
+        end
+
+      {:error, websocket, _reason} ->
+        %{data | websocket: websocket}
+    end
+  end
+
   defp send_close(data) do
-    with {:ok, websocket, encoded} <- Mint.WebSocket.encode(data.websocket, :close),
-         {:ok, conn} <- Mint.WebSocket.stream_request_body(data.conn, data.request_ref, encoded) do
-      %{data | conn: conn, websocket: websocket}
-    else
-      {:error, _, _} -> data
+    case Mint.WebSocket.encode(data.websocket, :close) do
+      {:ok, websocket, encoded} ->
+        case Mint.WebSocket.stream_request_body(data.conn, data.request_ref, encoded) do
+          {:ok, conn} -> %{data | conn: conn, websocket: websocket}
+          {:error, conn, _reason} -> %{data | conn: conn, websocket: websocket}
+        end
+
+      {:error, websocket, _reason} ->
+        %{data | websocket: websocket}
     end
   end
 
   defp send_pong(data, payload) do
-    with {:ok, websocket, encoded} <- Mint.WebSocket.encode(data.websocket, {:pong, payload}),
-         {:ok, conn} <- Mint.WebSocket.stream_request_body(data.conn, data.request_ref, encoded) do
-      %{data | conn: conn, websocket: websocket}
-    else
-      {:error, _, _} -> data
+    case Mint.WebSocket.encode(data.websocket, {:pong, payload}) do
+      {:ok, websocket, encoded} ->
+        case Mint.WebSocket.stream_request_body(data.conn, data.request_ref, encoded) do
+          {:ok, conn} -> %{data | conn: conn, websocket: websocket}
+          {:error, conn, _reason} -> %{data | conn: conn, websocket: websocket}
+        end
+
+      {:error, websocket, _reason} ->
+        %{data | websocket: websocket}
     end
   end
 
