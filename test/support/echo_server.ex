@@ -44,6 +44,12 @@ defmodule Parley.Test.EchoServer do
       |> WebSockAdapter.upgrade(WebSocket, %{}, [])
       |> halt()
     end
+
+    get "/reject" do
+      conn
+      |> send_resp(403, "Forbidden")
+      |> halt()
+    end
   end
 
   def start do

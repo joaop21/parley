@@ -123,6 +123,44 @@ defmodule ParleyTest do
       assert_receive {:disconnected, {:remote_close, 1000, "normal closure"}}, 1000
     end
 
+    test "rejected WebSocket upgrade keeps process alive", %{port: port} do
+      {:ok, pid} =
+        Client.start_link(%{test_pid: self()}, url: "ws://localhost:#{port}/reject")
+
+      assert_receive {:disconnected, {:error, _reason}}, 1000
+
+      # Process stays alive in :disconnected state
+      assert Process.alive?(pid)
+      Parley.disconnect(pid)
+    end
+
+    test "stream error during connecting keeps process alive" do
+      # Start a TCP server that accepts connections and sends invalid HTTP
+      {:ok, listen} = :gen_tcp.listen(0, [:binary, active: false, reuseaddr: true])
+      {:ok, port} = :inet.port(listen)
+
+      spawn(fn ->
+        {:ok, socket} = :gen_tcp.accept(listen)
+        # Send garbage that Mint can't parse as HTTP, then close
+        :gen_tcp.send(socket, "not-http\r\n\r\n")
+        Process.sleep(50)
+        :gen_tcp.close(socket)
+      end)
+
+      {:ok, pid} =
+        Client.start_link(%{test_pid: self()},
+          url: "ws://127.0.0.1:#{port}/ws",
+          connect_timeout: 2000
+        )
+
+      assert_receive {:disconnected, {:error, _reason}}, 2000
+
+      # Process stays alive in :disconnected state
+      assert Process.alive?(pid)
+      Parley.disconnect(pid)
+      :gen_tcp.close(listen)
+    end
+
     test "abrupt TCP disconnect keeps process alive in disconnected state", %{url: url} do
       {:ok, pid} = Client.start_link(%{test_pid: self()}, url: url)
       assert_receive :connected, 1000
