@@ -13,6 +13,10 @@ defmodule Parley.Test.EchoServer do
       {:stop, :normal, {1000, "normal closure"}, state}
     end
 
+    def handle_in({"crash", [opcode: :text]}, _state) do
+      Process.exit(self(), :kill)
+    end
+
     def handle_in({message, [opcode: :text]}, state) do
       {:reply, :ok, [{:text, message}], state}
     end
@@ -38,6 +42,12 @@ defmodule Parley.Test.EchoServer do
     get "/ws" do
       conn
       |> WebSockAdapter.upgrade(WebSocket, %{}, [])
+      |> halt()
+    end
+
+    get "/reject" do
+      conn
+      |> send_resp(403, "Forbidden")
       |> halt()
     end
   end
