@@ -26,4 +26,5 @@ erl_crash.dump
 parley-*.tar
 
 # Claude
-**/settings.local.json
+.claude/
+CLAUDE.md
