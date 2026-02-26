@@ -84,10 +84,6 @@ defmodule Parley.Connection do
     end
   end
 
-  def disconnected(:info, _message, _data) do
-    :keep_state_and_data
-  end
-
   def disconnected({:call, from}, {:send, _frame}, _data) do
     {:keep_state_and_data, [{:reply, from, {:error, :disconnected}}]}
   end
