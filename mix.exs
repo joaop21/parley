@@ -42,7 +42,7 @@ defmodule Parley.MixProject do
     [
       maintainers: ["João Silva"],
       licenses: ["MIT"],
-      links: %{"Repository" => @source_url},
+      links: %{"Repository" => @source_url, "Documentation" => "https://hexdocs.pm/parley"},
       files: ~w(lib .formatter.exs mix.exs README.md LICENSE)
     ]
   end
@@ -52,7 +52,37 @@ defmodule Parley.MixProject do
       main: "Parley",
       source_ref: "v#{@version}",
       source_url: @source_url,
-      extras: ["README.md", "LICENSE"]
+      extras: ["README.md", "LICENSE"],
+      groups_for_docs: [
+        Connection: &(&1[:kind] == :function),
+        Callbacks: &(&1[:kind] == :callback)
+      ],
+      before_closing_body_tag: %{
+        html: """
+        <script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
+        <script>
+          document.addEventListener("DOMContentLoaded", function () {
+            mermaid.initialize({
+              startOnLoad: false,
+              theme: document.body.className.includes("dark") ? "dark" : "default"
+            });
+            let id = 0;
+            for (const codeEl of document.querySelectorAll("pre code.mermaid")) {
+              const preEl = codeEl.parentElement;
+              const graphDefinition = codeEl.textContent;
+              const graphEl = document.createElement("div");
+              const graphId = "mermaid-graph-" + id++;
+              mermaid.render(graphId, graphDefinition).then(({svg, bindFunctions}) => {
+                graphEl.innerHTML = svg;
+                bindFunctions?.(graphEl);
+                preEl.insertAdjacentElement("afterend", graphEl);
+                preEl.remove();
+              });
+            }
+          });
+        </script>
+        """
+      }
     ]
   end
 

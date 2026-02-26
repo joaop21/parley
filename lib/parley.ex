@@ -1,6 +1,6 @@
 defmodule Parley do
   @moduledoc """
-  A WebSocket client built on `gen_statem` and Mint.
+  A WebSocket client built on `gen_statem` and [Mint WebSocket](https://hexdocs.pm/mint_web_socket).
 
   `Parley` provides a callback-based API similar to `GenServer`. You define a
   module with `use Parley`, implement the callbacks you need, and interact with
@@ -50,6 +50,13 @@ defmodule Parley do
 
       Supervisor.start_link(children, strategy: :one_for_one)
 
+  ## Options
+
+    * `:url` (required) — the WebSocket URL to connect to (e.g. `"wss://example.com/ws"`)
+    * `:name` — used for name registration, see the "Name registration" section below
+    * `:connect_timeout` — timeout in milliseconds for the WebSocket upgrade
+      handshake (default: `10_000`)
+
   ## Name registration
 
   The `:name` option supports the same values as `GenServer`:
@@ -57,6 +64,41 @@ defmodule Parley do
     * an atom — registered locally with `{:local, atom}`
     * `{:global, term}` — registered with `:global`
     * `{:via, module, term}` — registered with a custom registry
+
+  ## Connection lifecycle
+
+  The connection is managed as a state machine with three states:
+
+  ```mermaid
+  stateDiagram-v2
+      [*] --> disconnected: start_link/3
+
+      disconnected --> connecting: TCP connect + WebSocket upgrade
+
+      connecting --> connected: upgrade success
+      connecting --> disconnected: error / timeout
+
+      connected --> disconnected: error / close / disconnect/1
+
+      state connected {
+          [*] --> handle_connect
+          handle_connect --> waiting
+          waiting --> handle_frame: frame received
+          handle_frame --> waiting
+      }
+
+      state disconnected {
+          [*] --> handle_disconnect
+      }
+  ```
+
+  - **`disconnected`** — initial state. On process start, immediately attempts to connect.
+    Calls `c:handle_disconnect/2` when entering from another state.
+  - **`connecting`** — TCP connection established, waiting for the WebSocket upgrade
+    handshake to complete. Frames sent via `send_frame/2` during this state are
+    automatically queued and delivered once connected.
+  - **`connected`** — WebSocket upgrade complete. Calls `c:handle_connect/1` on entry,
+    then `c:handle_frame/2` for each frame received from the server.
 
   ## Callbacks
 
@@ -66,9 +108,16 @@ defmodule Parley do
     * `c:handle_connect/1` — called when the WebSocket handshake completes
     * `c:handle_frame/2` — called when a frame is received from the server
     * `c:handle_disconnect/2` — called when the connection is lost or closed
+
+  `c:handle_connect/1` and `c:handle_frame/2` also support `{:push, frame, state}`
+  to send a frame from within the callback, and `{:stop, reason, state}` to stop
+  the process. See the callback docs for details.
   """
 
+  @typedoc "The user-managed state passed through all callbacks."
   @type state :: term()
+
+  @typedoc "A WebSocket frame."
   @type frame :: {:text, String.t()} | {:binary, binary()} | {:ping, binary()} | {:pong, binary()}
 
   @doc """
@@ -96,7 +145,20 @@ defmodule Parley do
   @callback handle_frame(frame, state) ::
               {:ok, state} | {:push, frame, state} | {:stop, reason :: term(), state}
 
-  @doc "Called when the connection is lost or closed."
+  @doc """
+  Called when the connection is lost or closed.
+
+  The `reason` indicates why the connection ended:
+
+    * `:closed` — graceful disconnect via `disconnect/1`
+    * `{:remote_close, code, reason}` — server-initiated close frame
+    * `{:error, reason}` — stream or decode error
+    * `:connect_timeout` — WebSocket upgrade handshake timed out
+
+  ## Return values
+
+    * `{:ok, state}` — acknowledge the disconnect
+  """
   @callback handle_disconnect(reason :: term(), state) :: {:ok, state}
 
   defmacro __using__(_opts) do
@@ -114,6 +176,11 @@ defmodule Parley do
 
       defoverridable handle_connect: 1, handle_frame: 2, handle_disconnect: 2
 
+      @doc """
+      Returns a child specification for starting this module under a supervisor.
+
+      Accepts a tuple `{init_arg, opts}` where `opts` are passed to `start_link/2`.
+      """
       def child_spec({init_arg, opts}) do
         %{
           id: __MODULE__,
@@ -123,6 +190,11 @@ defmodule Parley do
 
       defoverridable child_spec: 1
 
+      @doc """
+      Starts this WebSocket client linked to the current process.
+
+      Delegates to `Parley.start_link/3`. See `Parley.start_link/3` for options.
+      """
       def start_link(init_arg, opts \\ []) do
         Parley.start_link(__MODULE__, init_arg, opts)
       end
@@ -149,6 +221,7 @@ defmodule Parley do
 
   See `:gen_statem.start_link/3` for return values.
   """
+  @spec start_link(module(), state(), keyword()) :: :gen_statem.start_ret()
   def start_link(module, init_arg, opts \\ []) when is_atom(module) and is_list(opts) do
     {url, opts} = Keyword.pop!(opts, :url)
     {connect_timeout, opts} = Keyword.pop(opts, :connect_timeout)
@@ -159,8 +232,11 @@ defmodule Parley do
   @doc """
   Starts a `Parley` process without a link (outside of a supervision tree).
 
-  See `start_link/3` for more information.
+  Accepts the same arguments and options as `start_link/3`. Useful for
+  interactive or scripted use where you don't want the calling process
+  to be linked.
   """
+  @spec start(module(), state(), keyword()) :: :gen_statem.start_ret()
   def start(module, init_arg, opts \\ []) when is_atom(module) and is_list(opts) do
     {url, opts} = Keyword.pop!(opts, :url)
     {connect_timeout, opts} = Keyword.pop(opts, :connect_timeout)
@@ -196,10 +272,35 @@ defmodule Parley do
     end
   end
 
+  @doc """
+  Sends a WebSocket frame to the server.
+
+  Returns `:ok` if the frame was sent successfully, or `{:error, reason}` if
+  the send failed (e.g. the process is in the `:disconnected` state).
+
+  ## Examples
+
+      :ok = Parley.send_frame(pid, {:text, "hello"})
+      :ok = Parley.send_frame(pid, {:binary, <<1, 2, 3>>})
+
+  """
+  @spec send_frame(:gen_statem.server_ref(), frame()) :: :ok | {:error, term()}
   def send_frame(server, frame) do
     :gen_statem.call(server, {:send, frame})
   end
 
+  @doc """
+  Gracefully disconnects from the WebSocket server.
+
+  Sends a WebSocket close frame and transitions the process to the
+  `:disconnected` state. The process remains alive after disconnecting.
+
+  ## Examples
+
+      :ok = Parley.disconnect(pid)
+
+  """
+  @spec disconnect(:gen_statem.server_ref()) :: :ok
   def disconnect(server) do
     :gen_statem.call(server, :disconnect)
   end
