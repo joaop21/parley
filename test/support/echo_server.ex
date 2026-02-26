@@ -9,6 +9,10 @@ defmodule Parley.Test.EchoServer do
     def init(_opts), do: {:ok, %{}}
 
     @impl true
+    def handle_in({"close", [opcode: :text]}, state) do
+      {:stop, :normal, {1000, "normal closure"}, state}
+    end
+
     def handle_in({message, [opcode: :text]}, state) do
       {:reply, :ok, [{:text, message}], state}
     end
