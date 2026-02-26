@@ -122,6 +122,44 @@ defmodule ParleyTest do
       :ok = Parley.send_frame(pid, {:text, "close"})
       assert_receive {:disconnected, {:remote_close, 1000, "normal closure"}}, 1000
     end
+
+    test "times out when server never completes the upgrade" do
+      # Start a TCP server that accepts connections but never responds
+      {:ok, listen} = :gen_tcp.listen(0, [:binary, active: false, reuseaddr: true])
+      {:ok, port} = :inet.port(listen)
+
+      {:ok, pid} =
+        Client.start_link(%{test_pid: self()},
+          url: "ws://127.0.0.1:#{port}/ws",
+          connect_timeout: 100
+        )
+
+      assert_receive {:disconnected, :connect_timeout}, 1000
+
+      # Process stays alive in :disconnected state
+      assert Process.alive?(pid)
+      Parley.disconnect(pid)
+      :gen_tcp.close(listen)
+    end
+
+    test "postponed send_frame gets replied on connect timeout" do
+      # Start a TCP server that accepts connections but never responds
+      {:ok, listen} = :gen_tcp.listen(0, [:binary, active: false, reuseaddr: true])
+      {:ok, port} = :inet.port(listen)
+
+      {:ok, pid} =
+        Client.start_link(%{test_pid: self()},
+          url: "ws://127.0.0.1:#{port}/ws",
+          connect_timeout: 200
+        )
+
+      # send_frame is postponed in :connecting, must not hang
+      task = Task.async(fn -> Parley.send_frame(pid, {:text, "hello"}) end)
+      assert {:error, :disconnected} = Task.await(task, 1000)
+
+      Parley.disconnect(pid)
+      :gen_tcp.close(listen)
+    end
   end
 
   describe "custom state" do

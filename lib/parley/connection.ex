@@ -3,6 +3,8 @@ defmodule Parley.Connection do
 
   @behaviour :gen_statem
 
+  @default_connect_timeout 10_000
+
   defstruct [
     :conn,
     :websocket,
@@ -10,6 +12,7 @@ defmodule Parley.Connection do
     :uri,
     :module,
     :user_state,
+    connect_timeout: @default_connect_timeout,
     status: nil,
     resp_headers: [],
     disconnect_reason: :closed
@@ -21,13 +24,15 @@ defmodule Parley.Connection do
   def callback_mode, do: [:state_functions, :state_enter]
 
   @impl true
-  def init({module, {url, user_state}}) do
+  def init({module, {url, user_state, opts}}) do
     uri = URI.parse(url)
+    connect_timeout = Keyword.get(opts, :connect_timeout, @default_connect_timeout)
 
     data = %__MODULE__{
       uri: uri,
       module: module,
-      user_state: user_state
+      user_state: user_state,
+      connect_timeout: connect_timeout
     }
 
     {:ok, :disconnected, data, [{:next_event, :internal, :connect}]}
@@ -93,8 +98,13 @@ defmodule Parley.Connection do
 
   ## :connecting state
 
-  def connecting(:enter, :disconnected, _data) do
-    :keep_state_and_data
+  def connecting(:enter, :disconnected, data) do
+    {:keep_state_and_data, [{:state_timeout, data.connect_timeout, :connect_timeout}]}
+  end
+
+  def connecting(:state_timeout, :connect_timeout, data) do
+    if data.conn, do: Mint.HTTP.close(data.conn)
+    {:next_state, :disconnected, %{data | conn: nil, disconnect_reason: :connect_timeout}}
   end
 
   def connecting(:info, message, data) do
