@@ -53,6 +53,10 @@ defmodule Parley.Connection do
      }}
   end
 
+  def disconnected(:internal, {:connect_error, reason}, data) do
+    {:stop, {:error, reason}, data}
+  end
+
   def disconnected(:internal, :connect, data) do
     %{uri: uri} = data
 

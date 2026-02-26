@@ -10,7 +10,7 @@ defmodule ParleyTest do
       if Process.alive?(server_pid), do: Supervisor.stop(server_pid, :normal, 1000)
     end)
 
-    %{port: port, url: "ws://localhost:#{port}/ws"}
+    %{port: port, url: "ws://localhost:#{port}/ws", server_pid: server_pid}
   end
 
   describe "connecting" do
@@ -87,6 +87,26 @@ defmodule ParleyTest do
       assert_receive {:disconnected, :closed}, 1000
 
       assert :ok = Parley.disconnect(pid)
+    end
+  end
+
+  describe "connection errors" do
+    test "start_link fails when host is unreachable" do
+      Process.flag(:trap_exit, true)
+
+      {:ok, pid} = Client.start_link(%{test_pid: self()}, url: "ws://127.0.0.1:1/ws")
+      assert_receive {:EXIT, ^pid, {:error, _reason}}, 1000
+    end
+
+    test "process stops when server drops the connection", %{url: url, server_pid: server_pid} do
+      Process.flag(:trap_exit, true)
+
+      {:ok, pid} = Client.start_link(%{test_pid: self()}, url: url)
+      assert_receive :connected, 1000
+
+      Supervisor.stop(server_pid, :normal, 1000)
+      assert_receive {:disconnected, :closed}, 1000
+      assert_receive {:EXIT, ^pid, {:error, _reason}}, 1000
     end
   end
 
