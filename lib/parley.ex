@@ -123,6 +123,8 @@ defmodule Parley do
     * `:url` (required) — the WebSocket URL to connect to (e.g. `"wss://example.com/ws"`)
     * `:name` — used for name registration, see the "Name registration" section
       in the module documentation
+    * `:connect_timeout` — timeout in milliseconds for the WebSocket upgrade
+      handshake (default: `10_000`)
 
   ## Return values
 
@@ -130,7 +132,9 @@ defmodule Parley do
   """
   def start_link(module, init_arg, opts \\ []) when is_atom(module) and is_list(opts) do
     {url, opts} = Keyword.pop!(opts, :url)
-    do_start(:start_link, module, {url, init_arg}, opts)
+    {connect_timeout, opts} = Keyword.pop(opts, :connect_timeout)
+    connection_opts = if connect_timeout, do: [connect_timeout: connect_timeout], else: []
+    do_start(:start_link, module, {url, init_arg, connection_opts}, opts)
   end
 
   @doc """
@@ -140,7 +144,9 @@ defmodule Parley do
   """
   def start(module, init_arg, opts \\ []) when is_atom(module) and is_list(opts) do
     {url, opts} = Keyword.pop!(opts, :url)
-    do_start(:start, module, {url, init_arg}, opts)
+    {connect_timeout, opts} = Keyword.pop(opts, :connect_timeout)
+    connection_opts = if connect_timeout, do: [connect_timeout: connect_timeout], else: []
+    do_start(:start, module, {url, init_arg, connection_opts}, opts)
   end
 
   defp do_start(link, module, init_arg, opts) do
