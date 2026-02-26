@@ -71,11 +71,30 @@ defmodule Parley do
   @type state :: term()
   @type frame :: {:text, String.t()} | {:binary, binary()} | {:ping, binary()} | {:pong, binary()}
 
-  @doc "Called when the WebSocket handshake completes."
-  @callback handle_connect(state) :: {:ok, state}
+  @doc """
+  Called when the WebSocket handshake completes.
 
-  @doc "Called when a frame is received from the server."
-  @callback handle_frame(frame, state) :: {:ok, state}
+  ## Return values
+
+    * `{:ok, state}` — update state, remain connected
+    * `{:push, frame, state}` — send a frame immediately after connecting
+      (useful for auth or subscribe messages)
+    * `{:stop, reason, state}` — reject the connection, stop the process
+  """
+  @callback handle_connect(state) ::
+              {:ok, state} | {:push, frame, state} | {:stop, reason :: term(), state}
+
+  @doc """
+  Called when a frame is received from the server.
+
+  ## Return values
+
+    * `{:ok, state}` — update state
+    * `{:push, frame, state}` — send a frame back to the server
+    * `{:stop, reason, state}` — close the connection and stop the process
+  """
+  @callback handle_frame(frame, state) ::
+              {:ok, state} | {:push, frame, state} | {:stop, reason :: term(), state}
 
   @doc "Called when the connection is lost or closed."
   @callback handle_disconnect(reason :: term(), state) :: {:ok, state}

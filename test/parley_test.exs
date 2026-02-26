@@ -312,6 +312,127 @@ defmodule ParleyTest do
     end
   end
 
+  describe "callback return types" do
+    test "handle_connect returning {:push, frame, state} sends frame on connect", %{url: url} do
+      defmodule PushOnConnectClient do
+        use Parley
+
+        @impl true
+        def handle_connect(%{test_pid: pid} = state) do
+          send(pid, :connected)
+          {:push, {:text, "hello on connect"}, state}
+        end
+
+        @impl true
+        def handle_frame(frame, %{test_pid: pid} = state) do
+          send(pid, {:frame, frame})
+          {:ok, state}
+        end
+
+        @impl true
+        def handle_disconnect(reason, %{test_pid: pid} = state) do
+          send(pid, {:disconnected, reason})
+          {:ok, state}
+        end
+      end
+
+      {:ok, pid} =
+        Parley.start_link(PushOnConnectClient, %{test_pid: self()}, url: url)
+
+      assert_receive :connected, 1000
+      # The echo server sends back our frame
+      assert_receive {:frame, {:text, "hello on connect"}}, 1000
+
+      Parley.disconnect(pid)
+    end
+
+    test "handle_connect returning {:stop, reason, state} stops the process", %{url: url} do
+      defmodule StopOnConnectClient do
+        use Parley
+
+        @impl true
+        def handle_connect(state) do
+          {:stop, :rejected, state}
+        end
+      end
+
+      Process.flag(:trap_exit, true)
+
+      {:ok, pid} =
+        Parley.start_link(StopOnConnectClient, %{test_pid: self()}, url: url)
+
+      assert_receive {:EXIT, ^pid, :rejected}, 1000
+    end
+
+    test "handle_frame returning {:push, frame, state} sends reply frame", %{url: url} do
+      defmodule PushOnFrameClient do
+        use Parley
+
+        @impl true
+        def handle_connect(%{test_pid: pid} = state) do
+          send(pid, :connected)
+          {:ok, state}
+        end
+
+        @impl true
+        def handle_frame({:text, "echo:" <> msg}, state) do
+          {:push, {:text, "reply:" <> msg}, state}
+        end
+
+        def handle_frame(frame, %{test_pid: pid} = state) do
+          send(pid, {:frame, frame})
+          {:ok, state}
+        end
+
+        @impl true
+        def handle_disconnect(reason, %{test_pid: pid} = state) do
+          send(pid, {:disconnected, reason})
+          {:ok, state}
+        end
+      end
+
+      {:ok, pid} =
+        Parley.start_link(PushOnFrameClient, %{test_pid: self()}, url: url)
+
+      assert_receive :connected, 1000
+
+      # Send a frame that triggers {:push, ...} reply, which gets echoed back
+      :ok = Parley.send_frame(pid, {:text, "echo:test"})
+      assert_receive {:frame, {:text, "reply:test"}}, 1000
+
+      Parley.disconnect(pid)
+    end
+
+    test "handle_frame returning {:stop, reason, state} stops the process", %{url: url} do
+      defmodule StopOnFrameClient do
+        use Parley
+
+        @impl true
+        def handle_connect(%{test_pid: pid} = state) do
+          send(pid, :connected)
+          {:ok, state}
+        end
+
+        @impl true
+        def handle_frame({:text, "stop"}, state) do
+          {:stop, :done, state}
+        end
+
+        def handle_frame(_frame, state), do: {:ok, state}
+      end
+
+      Process.flag(:trap_exit, true)
+
+      {:ok, pid} =
+        Parley.start_link(StopOnFrameClient, %{test_pid: self()}, url: url)
+
+      assert_receive :connected, 1000
+
+      :ok = Parley.send_frame(pid, {:text, "stop"})
+      assert_receive {:EXIT, ^pid, :done}, 1000
+    end
+  end
+
   describe "options validation" do
     test "start_link without :url raises KeyError" do
       assert_raise KeyError, ~r/key :url not found/, fn ->
