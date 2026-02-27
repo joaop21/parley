@@ -300,41 +300,22 @@ defmodule Parley.Connection do
   defp send_frame_internal(data, frame) do
     case Mint.WebSocket.encode(data.websocket, frame) do
       {:ok, websocket, encoded} ->
-        case Mint.WebSocket.stream_request_body(data.conn, data.request_ref, encoded) do
-          {:ok, conn} -> %{data | conn: conn, websocket: websocket}
-          {:error, conn, _reason} -> %{data | conn: conn, websocket: websocket}
-        end
+        conn =
+          case Mint.WebSocket.stream_request_body(data.conn, data.request_ref, encoded) do
+            {:ok, conn} -> conn
+            {:error, conn, _reason} -> conn
+          end
+
+        %{data | conn: conn, websocket: websocket}
 
       {:error, websocket, _reason} ->
         %{data | websocket: websocket}
     end
   end
 
-  defp send_close(data) do
-    case Mint.WebSocket.encode(data.websocket, :close) do
-      {:ok, websocket, encoded} ->
-        case Mint.WebSocket.stream_request_body(data.conn, data.request_ref, encoded) do
-          {:ok, conn} -> %{data | conn: conn, websocket: websocket}
-          {:error, conn, _reason} -> %{data | conn: conn, websocket: websocket}
-        end
+  defp send_close(data), do: send_frame_internal(data, :close)
 
-      {:error, websocket, _reason} ->
-        %{data | websocket: websocket}
-    end
-  end
-
-  defp send_pong(data, payload) do
-    case Mint.WebSocket.encode(data.websocket, {:pong, payload}) do
-      {:ok, websocket, encoded} ->
-        case Mint.WebSocket.stream_request_body(data.conn, data.request_ref, encoded) do
-          {:ok, conn} -> %{data | conn: conn, websocket: websocket}
-          {:error, conn, _reason} -> %{data | conn: conn, websocket: websocket}
-        end
-
-      {:error, websocket, _reason} ->
-        %{data | websocket: websocket}
-    end
-  end
+  defp send_pong(data, payload), do: send_frame_internal(data, {:pong, payload})
 
   defp done?(responses), do: Enum.any?(responses, &match?({:done, _}, &1))
 
