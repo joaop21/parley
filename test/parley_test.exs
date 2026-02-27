@@ -433,6 +433,55 @@ defmodule ParleyTest do
     end
   end
 
+  describe "push send failure" do
+    test "handle_frame {:push, ...} on dead connection transitions to disconnected", %{
+      url: url,
+      server_pid: server_pid
+    } do
+      defmodule PushOnDeadConnClient do
+        use Parley
+
+        @impl true
+        def handle_connect(%{test_pid: pid} = state) do
+          send(pid, :connected)
+          {:ok, state}
+        end
+
+        @impl true
+        def handle_frame({:text, "push_this"}, state) do
+          # Give the server time to die before we try to push
+          Process.sleep(50)
+          {:push, {:text, "reply"}, state}
+        end
+
+        def handle_frame(frame, %{test_pid: pid} = state) do
+          send(pid, {:frame, frame})
+          {:ok, state}
+        end
+
+        @impl true
+        def handle_disconnect(reason, %{test_pid: pid} = state) do
+          send(pid, {:disconnected, reason})
+          {:ok, state}
+        end
+      end
+
+      {:ok, pid} =
+        Parley.start_link(PushOnDeadConnClient, %{test_pid: self()}, url: url)
+
+      assert_receive :connected, 1000
+
+      # Server sends "push_this" then crashes after 10ms
+      :ok = Parley.send_frame(pid, {:text, "send_and_crash"})
+
+      # The client should transition to :disconnected because the push failed
+      assert_receive {:disconnected, {:error, _reason}}, 2000
+
+      assert Process.alive?(pid)
+      Parley.disconnect(pid)
+    end
+  end
+
   describe "options validation" do
     test "start_link without :url raises KeyError" do
       assert_raise KeyError, ~r/key :url not found/, fn ->

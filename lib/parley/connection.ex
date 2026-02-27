@@ -1,6 +1,8 @@
 defmodule Parley.Connection do
   @moduledoc false
 
+  require Logger
+
   @behaviour :gen_statem
 
   @default_connect_timeout 10_000
@@ -138,12 +140,28 @@ defmodule Parley.Connection do
 
       {:push, frame, user_state} ->
         data = %{data | user_state: user_state}
-        {:keep_state, send_frame_internal(data, frame)}
+
+        case send_frame_internal(data, frame) do
+          {:ok, data} ->
+            {:keep_state, data}
+
+          {:error, :encode, data, reason} ->
+            Logger.warning("Failed to encode frame: #{inspect(reason)}")
+            {:keep_state, data}
+
+          {:error, :send, data, reason} ->
+            {:keep_state, %{data | disconnect_reason: {:error, reason}},
+             [{:next_event, :internal, :send_failed}]}
+        end
 
       {:stop, reason, user_state} ->
         if data.conn, do: Mint.HTTP.close(data.conn)
         {:stop, reason, %{data | user_state: user_state, conn: nil}}
     end
+  end
+
+  def connected(:internal, :send_failed, data) do
+    {:next_state, :disconnected, data}
   end
 
   def connected(:info, message, data) do
@@ -261,6 +279,9 @@ defmodule Parley.Connection do
             {:next_state, :disconnected,
              %{data | conn: nil, disconnect_reason: {:remote_close, code, reason}}}
 
+          {:close_on_send_error, reason, data} ->
+            {:next_state, :disconnected, %{data | disconnect_reason: {:error, reason}}}
+
           {:stop, reason, data} ->
             if data.conn, do: Mint.HTTP.close(data.conn)
             {:stop, reason, %{data | conn: nil}}
@@ -282,40 +303,60 @@ defmodule Parley.Connection do
         {:cont, {:ok, send_pong(data, payload)}}
 
       frame, {:ok, data} ->
-        case data.module.handle_frame(frame, data.user_state) do
-          {:ok, user_state} ->
-            {:cont, {:ok, %{data | user_state: user_state}}}
-
-          {:push, reply_frame, user_state} ->
-            data = %{data | user_state: user_state}
-            {:cont, {:ok, send_frame_internal(data, reply_frame)}}
-
-          {:stop, reason, user_state} ->
-            data = %{data | user_state: user_state}
-            {:halt, {:stop, reason, data}}
-        end
+        handle_frame_result(data.module.handle_frame(frame, data.user_state), data)
     end)
+  end
+
+  defp handle_frame_result({:ok, user_state}, data) do
+    {:cont, {:ok, %{data | user_state: user_state}}}
+  end
+
+  defp handle_frame_result({:push, reply_frame, user_state}, data) do
+    data = %{data | user_state: user_state}
+
+    case send_frame_internal(data, reply_frame) do
+      {:ok, data} ->
+        {:cont, {:ok, data}}
+
+      {:error, :encode, data, reason} ->
+        Logger.warning("Failed to encode frame: #{inspect(reason)}")
+        {:cont, {:ok, data}}
+
+      {:error, :send, data, reason} ->
+        {:halt, {:close_on_send_error, reason, data}}
+    end
+  end
+
+  defp handle_frame_result({:stop, reason, user_state}, data) do
+    {:halt, {:stop, reason, %{data | user_state: user_state}}}
   end
 
   defp send_frame_internal(data, frame) do
     case Mint.WebSocket.encode(data.websocket, frame) do
       {:ok, websocket, encoded} ->
-        conn =
-          case Mint.WebSocket.stream_request_body(data.conn, data.request_ref, encoded) do
-            {:ok, conn} -> conn
-            {:error, conn, _reason} -> conn
-          end
+        case Mint.WebSocket.stream_request_body(data.conn, data.request_ref, encoded) do
+          {:ok, conn} ->
+            {:ok, %{data | conn: conn, websocket: websocket}}
 
-        %{data | conn: conn, websocket: websocket}
+          {:error, conn, reason} ->
+            {:error, :send, %{data | conn: conn, websocket: websocket}, reason}
+        end
 
-      {:error, websocket, _reason} ->
-        %{data | websocket: websocket}
+      {:error, websocket, reason} ->
+        {:error, :encode, %{data | websocket: websocket}, reason}
     end
   end
 
-  defp send_close(data), do: send_frame_internal(data, :close)
+  defp send_close(data), do: send_frame_best_effort(data, :close)
 
-  defp send_pong(data, payload), do: send_frame_internal(data, {:pong, payload})
+  defp send_pong(data, payload), do: send_frame_best_effort(data, {:pong, payload})
+
+  defp send_frame_best_effort(data, frame) do
+    case send_frame_internal(data, frame) do
+      {:ok, data} -> data
+      {:error, _, data, _reason} -> data
+    end
+  end
 
   defp done?(responses), do: Enum.any?(responses, &match?({:done, _}, &1))
 
