@@ -11,6 +11,7 @@ defmodule Parley.MixProject do
       elixir: "~> 1.19",
       elixirc_paths: elixirc_paths(Mix.env()),
       start_permanent: Mix.env() == :prod,
+      aliases: aliases(),
       deps: deps(),
       dialyzer: dialyzer(),
       name: "Parley",
@@ -19,6 +20,10 @@ defmodule Parley.MixProject do
       package: package(),
       docs: docs()
     ]
+  end
+
+  def cli do
+    [preferred_envs: [ci: :test]]
   end
 
   # Run "mix help compile.app" to learn about applications.
@@ -83,6 +88,18 @@ defmodule Parley.MixProject do
         </script>
         """
       }
+    ]
+  end
+
+  defp aliases do
+    [
+      ci: [
+        "compile --warnings-as-errors",
+        "format --check-formatted",
+        "credo --strict",
+        "dialyzer",
+        "test"
+      ]
     ]
   end
 
