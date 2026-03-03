@@ -27,17 +27,23 @@ defmodule Parley.Connection do
 
   @impl true
   def init({module, {url, user_state, opts}}) do
-    uri = URI.parse(url)
-    connect_timeout = Keyword.get(opts, :connect_timeout, @default_connect_timeout)
+    case module.init(user_state) do
+      {:ok, user_state} ->
+        uri = URI.parse(url)
+        connect_timeout = Keyword.get(opts, :connect_timeout, @default_connect_timeout)
 
-    data = %__MODULE__{
-      uri: uri,
-      module: module,
-      user_state: user_state,
-      connect_timeout: connect_timeout
-    }
+        data = %__MODULE__{
+          uri: uri,
+          module: module,
+          user_state: user_state,
+          connect_timeout: connect_timeout
+        }
 
-    {:ok, :disconnected, data, [{:next_event, :internal, :connect}]}
+        {:ok, :disconnected, data, [{:next_event, :internal, :connect}]}
+
+      {:stop, reason} ->
+        {:stop, reason}
+    end
   end
 
   ## :disconnected state
