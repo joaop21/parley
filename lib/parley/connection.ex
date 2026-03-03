@@ -161,7 +161,8 @@ defmodule Parley.Connection do
   end
 
   def connected(:internal, :send_failed, data) do
-    {:next_state, :disconnected, data}
+    if data.conn, do: Mint.HTTP.close(data.conn)
+    {:next_state, :disconnected, %{data | conn: nil}}
   end
 
   def connected(:info, message, data) do
@@ -280,7 +281,8 @@ defmodule Parley.Connection do
              %{data | conn: nil, disconnect_reason: {:remote_close, code, reason}}}
 
           {:close_on_send_error, reason, data} ->
-            {:next_state, :disconnected, %{data | disconnect_reason: {:error, reason}}}
+            if data.conn, do: Mint.HTTP.close(data.conn)
+            {:next_state, :disconnected, %{data | conn: nil, disconnect_reason: {:error, reason}}}
 
           {:stop, reason, data} ->
             if data.conn, do: Mint.HTTP.close(data.conn)
