@@ -482,6 +482,46 @@ defmodule ParleyTest do
     end
   end
 
+  describe "init/1 callback" do
+    test "transforms init_arg before handle_connect sees it", %{url: url} do
+      defmodule InitTransformClient do
+        use Parley
+
+        @impl true
+        def init(%{raw: value, test_pid: pid}) do
+          {:ok, %{test_pid: pid, transformed: value * 2}}
+        end
+
+        @impl true
+        def handle_connect(%{test_pid: pid, transformed: value} = state) do
+          send(pid, {:connected_with, value})
+          {:ok, state}
+        end
+      end
+
+      {:ok, pid} =
+        Parley.start_link(InitTransformClient, %{raw: 21, test_pid: self()}, url: url)
+
+      assert_receive {:connected_with, 42}, 1000
+
+      Parley.disconnect(pid)
+    end
+
+    test "returning {:stop, reason} stops the process", %{url: url} do
+      defmodule InitStopClient do
+        use Parley
+
+        @impl true
+        def init(_arg), do: {:stop, :bad_arg}
+      end
+
+      Process.flag(:trap_exit, true)
+
+      assert {:error, :bad_arg} =
+               Parley.start_link(InitStopClient, %{}, url: url)
+    end
+  end
+
   describe "options validation" do
     test "start_link without :url raises KeyError" do
       assert_raise KeyError, ~r/key :url not found/, fn ->
