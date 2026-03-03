@@ -17,6 +17,11 @@ defmodule Parley.Test.EchoServer do
       Process.exit(self(), :kill)
     end
 
+    def handle_in({"send_and_crash", [opcode: :text]}, state) do
+      Process.send_after(self(), :crash, 10)
+      {:reply, :ok, [{:text, "push_this"}], state}
+    end
+
     def handle_in({message, [opcode: :text]}, state) do
       {:reply, :ok, [{:text, message}], state}
     end
@@ -26,6 +31,7 @@ defmodule Parley.Test.EchoServer do
     end
 
     @impl true
+    def handle_info(:crash, _state), do: Process.exit(self(), :kill)
     def handle_info(_message, state), do: {:ok, state}
 
     @impl true
