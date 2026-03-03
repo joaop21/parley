@@ -28,6 +28,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Set up Elixir
+        id: setup-beam
         uses: erlef/setup-beam@v1
         with:
           otp-version: ${{ matrix.otp }}
@@ -48,9 +49,9 @@ jobs:
         id: plt-cache
         with:
           path: priv/plts
-          key: ${{ runner.os }}-plt-${{ matrix.otp }}-${{ matrix.elixir }}-${{ hashFiles('**/mix.lock') }}
+          key: ${{ runner.os }}-plt-${{ steps.setup-beam.outputs.otp-version }}-${{ steps.setup-beam.outputs.elixir-version }}-${{ hashFiles('**/mix.lock') }}
           restore-keys: |
-            ${{ runner.os }}-plt-${{ matrix.otp }}-${{ matrix.elixir }}-
+            ${{ runner.os }}-plt-${{ steps.setup-beam.outputs.otp-version }}-${{ steps.setup-beam.outputs.elixir-version }}-
 
       - name: Install dependencies
         run: mix deps.get
