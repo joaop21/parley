@@ -102,9 +102,11 @@ defmodule Parley do
 
   ## Callbacks
 
-  All callbacks are optional and have default implementations that return
-  `{:ok, state}`. Override only the ones you need.
+  All callbacks are optional and have default implementations. Override only
+  the ones you need.
 
+    * `c:init/1` — called when the process starts, before connecting.
+      Transforms the `init_arg` into user state (default: passes it through)
     * `c:handle_connect/1` — called when the WebSocket handshake completes
     * `c:handle_frame/2` — called when a frame is received from the server
     * `c:handle_disconnect/2` — called when the connection is lost or closed
@@ -119,6 +121,20 @@ defmodule Parley do
 
   @typedoc "A WebSocket frame."
   @type frame :: {:text, String.t()} | {:binary, binary()} | {:ping, binary()} | {:pong, binary()}
+
+  @doc """
+  Called when the process starts, before connecting to the server.
+
+  Receives the `init_arg` passed to `start_link/3` and returns the initial
+  user state. Use this to validate arguments, build structs, create ETS tables,
+  or start linked processes.
+
+  ## Return values
+
+    * `{:ok, state}` — proceed with the transformed state
+    * `{:stop, reason}` — stop the process before connecting
+  """
+  @callback init(init_arg :: term()) :: {:ok, state} | {:stop, reason :: term()}
 
   @doc """
   Called when the WebSocket handshake completes.
@@ -166,6 +182,9 @@ defmodule Parley do
       @behaviour Parley
 
       @impl true
+      def init(init_arg), do: {:ok, init_arg}
+
+      @impl true
       def handle_connect(state), do: {:ok, state}
 
       @impl true
@@ -174,7 +193,7 @@ defmodule Parley do
       @impl true
       def handle_disconnect(_reason, state), do: {:ok, state}
 
-      defoverridable handle_connect: 1, handle_frame: 2, handle_disconnect: 2
+      defoverridable init: 1, handle_connect: 1, handle_frame: 2, handle_disconnect: 2
 
       @doc """
       Returns a child specification for starting this module under a supervisor.
