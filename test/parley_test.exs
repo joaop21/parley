@@ -656,6 +656,73 @@ defmodule ParleyTest do
     end
   end
 
+  describe "connection options" do
+    test "headers are sent during WebSocket upgrade", %{port: port} do
+      {:ok, pid} =
+        Client.start_link(%{test_pid: self()},
+          url: "ws://localhost:#{port}/ws/auth",
+          headers: [{"authorization", "Bearer test-token"}]
+        )
+
+      assert_receive :connected, 1000
+
+      :ok = Parley.send_frame(pid, {:text, "authed"})
+      assert_receive {:frame, {:text, "authed"}}, 1000
+
+      Parley.disconnect(pid)
+    end
+
+    test "connection without required headers gets rejected", %{port: port} do
+      {:ok, pid} =
+        Client.start_link(%{test_pid: self()},
+          url: "ws://localhost:#{port}/ws/auth"
+        )
+
+      assert_receive {:disconnected, {:error, _reason}}, 1000
+
+      assert Process.alive?(pid)
+      Parley.disconnect(pid)
+    end
+
+    test "transport_opts are forwarded to Mint (smoke test)", %{url: url} do
+      # Verifies the option is accepted without breaking the connection.
+      # The actual TCP-level effect isn't observable in this test.
+      {:ok, pid} =
+        Client.start_link(%{test_pid: self()},
+          url: url,
+          transport_opts: [send_timeout: 30_000]
+        )
+
+      assert_receive :connected, 1000
+
+      Parley.disconnect(pid)
+    end
+
+    test "protocols option is forwarded to Mint", %{url: url} do
+      {:ok, pid} =
+        Client.start_link(%{test_pid: self()},
+          url: url,
+          protocols: [:http1]
+        )
+
+      assert_receive :connected, 1000
+
+      Parley.disconnect(pid)
+    end
+
+    test "start/3 forwards connection options", %{port: port} do
+      {:ok, pid} =
+        Parley.start(Client, %{test_pid: self()},
+          url: "ws://localhost:#{port}/ws/auth",
+          headers: [{"authorization", "Bearer test-token"}]
+        )
+
+      assert_receive :connected, 1000
+
+      Parley.disconnect(pid)
+    end
+  end
+
   describe "options validation" do
     test "start_link without :url raises KeyError" do
       assert_raise KeyError, ~r/key :url not found/, fn ->

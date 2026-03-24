@@ -54,8 +54,16 @@ defmodule Parley do
 
     * `:url` (required) — the WebSocket URL to connect to (e.g. `"wss://example.com/ws"`)
     * `:name` — used for name registration, see the "Name registration" section below
+    * `:headers` — custom headers sent with the WebSocket upgrade request
+      (e.g. `[{"authorization", "Bearer token"}]`). Default: `[]`
     * `:connect_timeout` — timeout in milliseconds for the WebSocket upgrade
       handshake (default: `10_000`)
+    * `:transport_opts` — options passed to the transport layer (`:gen_tcp` for
+      `ws://`, `:ssl` for `wss://`). Use this for TLS configuration such as
+      certificate pinning, custom CAs, or TCP-level timeouts
+      (e.g. `[timeout: 5_000, cacertfile: "path/to/ca.pem"]`)
+    * `:protocols` — Mint HTTP protocols to use for the connection
+      (default: `[:http1]`)
 
   ## Name registration
 
@@ -262,8 +270,16 @@ defmodule Parley do
     * `:url` (required) — the WebSocket URL to connect to (e.g. `"wss://example.com/ws"`)
     * `:name` — used for name registration, see the "Name registration" section
       in the module documentation
+    * `:headers` — custom headers sent with the WebSocket upgrade request
+      (e.g. `[{"authorization", "Bearer token"}]`). Default: `[]`
     * `:connect_timeout` — timeout in milliseconds for the WebSocket upgrade
       handshake (default: `10_000`)
+    * `:transport_opts` — options passed to the transport layer (`:gen_tcp` for
+      `ws://`, `:ssl` for `wss://`). Use this for TLS configuration such as
+      certificate pinning, custom CAs, or TCP-level timeouts
+      (e.g. `[timeout: 5_000, cacertfile: "path/to/ca.pem"]`)
+    * `:protocols` — Mint HTTP protocols to use for the connection
+      (default: `[:http1]`)
 
   ## Return values
 
@@ -273,7 +289,21 @@ defmodule Parley do
   def start_link(module, init_arg, opts \\ []) when is_atom(module) and is_list(opts) do
     {url, opts} = Keyword.pop!(opts, :url)
     {connect_timeout, opts} = Keyword.pop(opts, :connect_timeout)
-    connection_opts = if connect_timeout, do: [connect_timeout: connect_timeout], else: []
+    {headers, opts} = Keyword.pop(opts, :headers)
+    {transport_opts, opts} = Keyword.pop(opts, :transport_opts)
+    {protocols, opts} = Keyword.pop(opts, :protocols)
+
+    connection_opts =
+      Enum.reject(
+        [
+          connect_timeout: connect_timeout,
+          headers: headers,
+          transport_opts: transport_opts,
+          protocols: protocols
+        ],
+        fn {_k, v} -> is_nil(v) end
+      )
+
     do_start(:start_link, module, {url, init_arg, connection_opts}, opts)
   end
 
@@ -288,7 +318,21 @@ defmodule Parley do
   def start(module, init_arg, opts \\ []) when is_atom(module) and is_list(opts) do
     {url, opts} = Keyword.pop!(opts, :url)
     {connect_timeout, opts} = Keyword.pop(opts, :connect_timeout)
-    connection_opts = if connect_timeout, do: [connect_timeout: connect_timeout], else: []
+    {headers, opts} = Keyword.pop(opts, :headers)
+    {transport_opts, opts} = Keyword.pop(opts, :transport_opts)
+    {protocols, opts} = Keyword.pop(opts, :protocols)
+
+    connection_opts =
+      Enum.reject(
+        [
+          connect_timeout: connect_timeout,
+          headers: headers,
+          transport_opts: transport_opts,
+          protocols: protocols
+        ],
+        fn {_k, v} -> is_nil(v) end
+      )
+
     do_start(:start, module, {url, init_arg, connection_opts}, opts)
   end
 
