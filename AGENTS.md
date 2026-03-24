@@ -21,15 +21,17 @@ Parley provides a callback-based API (`use Parley`) backed by a `gen_statem` sta
 
 ### Core Modules
 
-- `Parley` (`lib/parley.ex`) — Behaviour definition with 3 callbacks + `__using__` macro
+- `Parley` (`lib/parley.ex`) — Behaviour definition with callbacks + `__using__` macro
 - `Parley.Connection` (`lib/parley/connection.ex`) — `gen_statem` implementation with state machine: `disconnected → connecting → connected`
 - `Parley.Application` (`lib/parley/application.ex`) — OTP Application supervisor
 
 ### Callbacks
 
 ```elixir
-@callback handle_connect(state) :: {:ok, state}
-@callback handle_frame(frame, state) :: {:ok, state}
+@callback init(init_arg) :: {:ok, state} | {:stop, reason}
+@callback handle_connect(state) :: {:ok, state} | {:push, frame, state} | {:stop, reason, state}
+@callback handle_frame(frame, state) :: {:ok, state} | {:push, frame, state} | {:stop, reason, state}
+@callback handle_info(message, state) :: {:ok, state} | {:push, frame, state} | {:stop, reason, state}
 @callback handle_disconnect(reason, state) :: {:ok, state}
 ```
 

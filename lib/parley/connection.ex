@@ -92,8 +92,18 @@ defmodule Parley.Connection do
     end
   end
 
-  def disconnected(:info, _message, _data) do
-    :keep_state_and_data
+  def disconnected(:info, message, data) do
+    case data.module.handle_info(message, data.user_state) do
+      {:ok, user_state} ->
+        {:keep_state, %{data | user_state: user_state}}
+
+      {:push, _frame, user_state} ->
+        Logger.warning("Ignoring {:push, ...} from handle_info/2 while disconnected")
+        {:keep_state, %{data | user_state: user_state}}
+
+      {:stop, reason, user_state} ->
+        {:stop, reason, %{data | user_state: user_state}}
+    end
   end
 
   def disconnected({:call, from}, {:send, _frame}, _data) do
@@ -124,7 +134,18 @@ defmodule Parley.Connection do
         {:next_state, :disconnected, %{data | conn: nil, disconnect_reason: {:error, reason}}}
 
       :unknown ->
-        :keep_state_and_data
+        case data.module.handle_info(message, data.user_state) do
+          {:ok, user_state} ->
+            {:keep_state, %{data | user_state: user_state}}
+
+          {:push, _frame, user_state} ->
+            Logger.warning("Ignoring {:push, ...} from handle_info/2 while connecting")
+            {:keep_state, %{data | user_state: user_state}}
+
+          {:stop, reason, user_state} ->
+            if data.conn, do: Mint.HTTP.close(data.conn)
+            {:stop, reason, %{data | user_state: user_state, conn: nil}}
+        end
     end
   end
 
@@ -180,7 +201,7 @@ defmodule Parley.Connection do
         {:next_state, :disconnected, %{data | conn: nil, disconnect_reason: {:error, reason}}}
 
       :unknown ->
-        :keep_state_and_data
+        handle_info_result(data.module.handle_info(message, data.user_state), data)
     end
   end
 
@@ -337,6 +358,32 @@ defmodule Parley.Connection do
 
   defp handle_frame_result({:stop, reason, user_state}, data) do
     {:halt, {:stop, reason, %{data | user_state: user_state}}}
+  end
+
+  defp handle_info_result({:ok, user_state}, data) do
+    {:keep_state, %{data | user_state: user_state}}
+  end
+
+  defp handle_info_result({:push, frame, user_state}, data) do
+    data = %{data | user_state: user_state}
+
+    case send_frame_internal(data, frame) do
+      {:ok, data} ->
+        {:keep_state, data}
+
+      {:error, :encode, data, reason} ->
+        Logger.warning("Failed to encode frame: #{inspect(reason)}")
+        {:keep_state, data}
+
+      {:error, :send, data, reason} ->
+        {:keep_state, %{data | disconnect_reason: {:error, reason}},
+         [{:next_event, :internal, :send_failed}]}
+    end
+  end
+
+  defp handle_info_result({:stop, reason, user_state}, data) do
+    if data.conn, do: Mint.HTTP.close(data.conn)
+    {:stop, reason, %{data | user_state: user_state, conn: nil}}
   end
 
   defp send_frame_internal(data, frame) do

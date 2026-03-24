@@ -522,6 +522,140 @@ defmodule ParleyTest do
     end
   end
 
+  describe "handle_info/2" do
+    test "receives non-Mint messages while connected", %{url: url} do
+      defmodule HandleInfoClient do
+        use Parley
+
+        @impl true
+        def handle_connect(%{test_pid: pid} = state) do
+          send(pid, :connected)
+          {:ok, state}
+        end
+
+        @impl true
+        def handle_info(message, %{test_pid: pid} = state) do
+          send(pid, {:info, message})
+          {:ok, state}
+        end
+
+        @impl true
+        def handle_disconnect(reason, %{test_pid: pid} = state) do
+          send(pid, {:disconnected, reason})
+          {:ok, state}
+        end
+      end
+
+      {:ok, pid} = Parley.start_link(HandleInfoClient, %{test_pid: self()}, url: url)
+      assert_receive :connected, 1000
+
+      send(pid, :hello)
+      assert_receive {:info, :hello}, 1000
+
+      Parley.disconnect(pid)
+    end
+
+    test "returning {:push, frame, state} sends a frame while connected", %{url: url} do
+      defmodule HandleInfoPushClient do
+        use Parley
+
+        @impl true
+        def handle_connect(%{test_pid: pid} = state) do
+          send(pid, :connected)
+          {:ok, state}
+        end
+
+        @impl true
+        def handle_info(:send_heartbeat, state) do
+          {:push, {:text, "heartbeat"}, state}
+        end
+
+        @impl true
+        def handle_frame(frame, %{test_pid: pid} = state) do
+          send(pid, {:frame, frame})
+          {:ok, state}
+        end
+
+        @impl true
+        def handle_disconnect(reason, %{test_pid: pid} = state) do
+          send(pid, {:disconnected, reason})
+          {:ok, state}
+        end
+      end
+
+      {:ok, pid} = Parley.start_link(HandleInfoPushClient, %{test_pid: self()}, url: url)
+      assert_receive :connected, 1000
+
+      send(pid, :send_heartbeat)
+      # The echo server sends our frame back
+      assert_receive {:frame, {:text, "heartbeat"}}, 1000
+
+      Parley.disconnect(pid)
+    end
+
+    test "returning {:stop, reason, state} stops the process", %{url: url} do
+      defmodule HandleInfoStopClient do
+        use Parley
+
+        @impl true
+        def handle_connect(%{test_pid: pid} = state) do
+          send(pid, :connected)
+          {:ok, state}
+        end
+
+        @impl true
+        def handle_info(:please_stop, state) do
+          {:stop, :info_stop, state}
+        end
+      end
+
+      Process.flag(:trap_exit, true)
+
+      {:ok, pid} = Parley.start_link(HandleInfoStopClient, %{test_pid: self()}, url: url)
+      assert_receive :connected, 1000
+
+      send(pid, :please_stop)
+      assert_receive {:EXIT, ^pid, :info_stop}, 1000
+    end
+
+    test "receives messages while disconnected", %{url: url} do
+      defmodule HandleInfoDisconnectedClient do
+        use Parley
+
+        @impl true
+        def handle_connect(%{test_pid: pid} = state) do
+          send(pid, :connected)
+          {:ok, state}
+        end
+
+        @impl true
+        def handle_info(message, %{test_pid: pid} = state) do
+          send(pid, {:info, message})
+          {:ok, state}
+        end
+
+        @impl true
+        def handle_disconnect(reason, %{test_pid: pid} = state) do
+          send(pid, {:disconnected, reason})
+          {:ok, state}
+        end
+      end
+
+      {:ok, pid} =
+        Parley.start_link(HandleInfoDisconnectedClient, %{test_pid: self()}, url: url)
+
+      assert_receive :connected, 1000
+
+      :ok = Parley.disconnect(pid)
+      assert_receive {:disconnected, :closed}, 1000
+
+      send(pid, :while_disconnected)
+      assert_receive {:info, :while_disconnected}, 1000
+
+      Parley.disconnect(pid)
+    end
+  end
+
   describe "options validation" do
     test "start_link without :url raises KeyError" do
       assert_raise KeyError, ~r/key :url not found/, fn ->
