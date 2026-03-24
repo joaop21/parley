@@ -38,6 +38,25 @@ defmodule Parley.Test.EchoServer do
     def terminate(_reason, _state), do: :ok
   end
 
+  defmodule AuthWebSocket do
+    @moduledoc false
+    @behaviour WebSock
+
+    @impl true
+    def init(_opts), do: {:ok, %{}}
+
+    @impl true
+    def handle_in({message, [opcode: :text]}, state) do
+      {:reply, :ok, [{:text, message}], state}
+    end
+
+    @impl true
+    def handle_info(_message, state), do: {:ok, state}
+
+    @impl true
+    def terminate(_reason, _state), do: :ok
+  end
+
   defmodule Router do
     @moduledoc false
     use Plug.Router
@@ -49,6 +68,20 @@ defmodule Parley.Test.EchoServer do
       conn
       |> WebSockAdapter.upgrade(WebSocket, %{}, [])
       |> halt()
+    end
+
+    get "/ws/auth" do
+      case Plug.Conn.get_req_header(conn, "authorization") do
+        ["Bearer " <> _token] ->
+          conn
+          |> WebSockAdapter.upgrade(AuthWebSocket, %{}, [])
+          |> halt()
+
+        _ ->
+          conn
+          |> send_resp(401, "Unauthorized")
+          |> halt()
+      end
     end
 
     get "/reject" do

@@ -86,8 +86,10 @@ defmodule Parley.Connection do
     ws_scheme = ws_scheme(uri.scheme)
     path = (uri.path || "/") <> if(uri.query, do: "?#{uri.query}", else: "")
 
-    with {:ok, conn} <- Mint.HTTP.connect(http_scheme, uri.host, port, protocols: [:http1]),
-         {:ok, conn, request_ref} <- Mint.WebSocket.upgrade(ws_scheme, conn, path, []) do
+    connect_opts = [protocols: data.protocols, transport_opts: data.transport_opts]
+
+    with {:ok, conn} <- Mint.HTTP.connect(http_scheme, uri.host, port, connect_opts),
+         {:ok, conn, request_ref} <- Mint.WebSocket.upgrade(ws_scheme, conn, path, data.headers) do
       {:next_state, :connecting, %{data | conn: conn, request_ref: request_ref}}
     else
       # connect/3 fails
