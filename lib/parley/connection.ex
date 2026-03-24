@@ -15,6 +15,9 @@ defmodule Parley.Connection do
     :module,
     :user_state,
     connect_timeout: @default_connect_timeout,
+    headers: [],
+    transport_opts: [],
+    protocols: [:http1],
     status: nil,
     resp_headers: [],
     disconnect_reason: :closed
@@ -31,12 +34,18 @@ defmodule Parley.Connection do
       {:ok, user_state} ->
         uri = URI.parse(url)
         connect_timeout = Keyword.get(opts, :connect_timeout, @default_connect_timeout)
+        headers = Keyword.get(opts, :headers, [])
+        transport_opts = Keyword.get(opts, :transport_opts, [])
+        protocols = Keyword.get(opts, :protocols, [:http1])
 
         data = %__MODULE__{
           uri: uri,
           module: module,
           user_state: user_state,
-          connect_timeout: connect_timeout
+          connect_timeout: connect_timeout,
+          headers: headers,
+          transport_opts: transport_opts,
+          protocols: protocols
         }
 
         {:ok, :disconnected, data, [{:next_event, :internal, :connect}]}
