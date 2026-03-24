@@ -54,8 +54,16 @@ defmodule Parley do
 
     * `:url` (required) — the WebSocket URL to connect to (e.g. `"wss://example.com/ws"`)
     * `:name` — used for name registration, see the "Name registration" section below
+    * `:headers` — custom headers sent with the WebSocket upgrade request
+      (e.g. `[{"authorization", "Bearer token"}]`). Default: `[]`
     * `:connect_timeout` — timeout in milliseconds for the WebSocket upgrade
       handshake (default: `10_000`)
+    * `:transport_opts` — options passed to the transport layer (`:gen_tcp` for
+      `ws://`, `:ssl` for `wss://`). Use this for TLS configuration such as
+      certificate pinning, custom CAs, or TCP-level timeouts
+      (e.g. `[timeout: 5_000, cacertfile: "path/to/ca.pem"]`)
+    * `:protocols` — Mint HTTP protocols to use for the connection
+      (default: `[:http1]`)
 
   ## Name registration
 
@@ -262,8 +270,16 @@ defmodule Parley do
     * `:url` (required) — the WebSocket URL to connect to (e.g. `"wss://example.com/ws"`)
     * `:name` — used for name registration, see the "Name registration" section
       in the module documentation
+    * `:headers` — custom headers sent with the WebSocket upgrade request
+      (e.g. `[{"authorization", "Bearer token"}]`). Default: `[]`
     * `:connect_timeout` — timeout in milliseconds for the WebSocket upgrade
       handshake (default: `10_000`)
+    * `:transport_opts` — options passed to the transport layer (`:gen_tcp` for
+      `ws://`, `:ssl` for `wss://`). Use this for TLS configuration such as
+      certificate pinning, custom CAs, or TCP-level timeouts
+      (e.g. `[timeout: 5_000, cacertfile: "path/to/ca.pem"]`)
+    * `:protocols` — Mint HTTP protocols to use for the connection
+      (default: `[:http1]`)
 
   ## Return values
 

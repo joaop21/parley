@@ -35,6 +35,17 @@ Parley provides a callback-based API (`use Parley`) backed by a `gen_statem` sta
 @callback handle_disconnect(reason, state) :: {:ok, state}
 ```
 
+### Connection Options
+
+Options passed to `Parley.start_link/3` or `Parley.start/3`:
+
+- `:url` (required) — WebSocket URL (`"ws://..."` or `"wss://..."`)
+- `:name` — name registration (atom, `{:global, term}`, or `{:via, module, term}`)
+- `:headers` — custom headers sent with the WebSocket upgrade request (default: `[]`)
+- `:connect_timeout` — timeout in ms for the WebSocket upgrade handshake (default: `10_000`)
+- `:transport_opts` — options passed to the transport layer (`:gen_tcp` / `:ssl`), for TLS config, timeouts, etc.
+- `:protocols` — Mint HTTP protocols (default: `[:http1]`)
+
 ### State Machine
 
 - **`:disconnected`** — Initial state. Triggers connection via internal event. Rejects sends with `{:error, :disconnected}`.
