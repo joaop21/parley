@@ -273,7 +273,21 @@ defmodule Parley do
   def start_link(module, init_arg, opts \\ []) when is_atom(module) and is_list(opts) do
     {url, opts} = Keyword.pop!(opts, :url)
     {connect_timeout, opts} = Keyword.pop(opts, :connect_timeout)
-    connection_opts = if connect_timeout, do: [connect_timeout: connect_timeout], else: []
+    {headers, opts} = Keyword.pop(opts, :headers)
+    {transport_opts, opts} = Keyword.pop(opts, :transport_opts)
+    {protocols, opts} = Keyword.pop(opts, :protocols)
+
+    connection_opts =
+      Enum.reject(
+        [
+          connect_timeout: connect_timeout,
+          headers: headers,
+          transport_opts: transport_opts,
+          protocols: protocols
+        ],
+        fn {_k, v} -> is_nil(v) end
+      )
+
     do_start(:start_link, module, {url, init_arg, connection_opts}, opts)
   end
 
@@ -288,7 +302,21 @@ defmodule Parley do
   def start(module, init_arg, opts \\ []) when is_atom(module) and is_list(opts) do
     {url, opts} = Keyword.pop!(opts, :url)
     {connect_timeout, opts} = Keyword.pop(opts, :connect_timeout)
-    connection_opts = if connect_timeout, do: [connect_timeout: connect_timeout], else: []
+    {headers, opts} = Keyword.pop(opts, :headers)
+    {transport_opts, opts} = Keyword.pop(opts, :transport_opts)
+    {protocols, opts} = Keyword.pop(opts, :protocols)
+
+    connection_opts =
+      Enum.reject(
+        [
+          connect_timeout: connect_timeout,
+          headers: headers,
+          transport_opts: transport_opts,
+          protocols: protocols
+        ],
+        fn {_k, v} -> is_nil(v) end
+      )
+
     do_start(:start, module, {url, init_arg, connection_opts}, opts)
   end
 
