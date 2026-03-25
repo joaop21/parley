@@ -62,6 +62,8 @@ defmodule Parley.Connection do
   end
 
   def disconnected(:enter, _old_state, data) do
+    if data.conn, do: Mint.HTTP.close(data.conn)
+
     {:ok, user_state} = data.module.handle_disconnect(data.disconnect_reason, data.user_state)
 
     {:keep_state,
