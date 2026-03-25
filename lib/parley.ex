@@ -79,25 +79,47 @@ defmodule Parley do
 
   ```mermaid
   stateDiagram-v2
-      [*] --> disconnected: start_link/3
+      [*] --> init: start_link/3
+      init --> disconnected: {:ok, state}
+      init --> [*]: {:stop, reason}
 
-      disconnected --> connecting: TCP connect + WebSocket upgrade
+      disconnected --> connecting: TCP connect + WS upgrade
+      disconnected --> [*]: connect / upgrade failure
 
       connecting --> connected: upgrade success
       connecting --> disconnected: error / timeout
 
       connected --> disconnected: error / close / disconnect/1
+      connected --> [*]: callback {:stop, ...}
+
+      state disconnected {
+          [*] --> handle_disconnect
+      }
 
       state connected {
           [*] --> handle_connect
           handle_connect --> waiting
           waiting --> handle_frame: frame received
           handle_frame --> waiting
+          waiting --> handle_ping: ping received
+          handle_ping --> waiting
       }
 
-      state disconnected {
-          [*] --> handle_disconnect
-      }
+      note right of connecting
+          send_frame/2 calls are queued
+          and replayed on connect
+      end note
+
+      note right of connected
+          Pings auto‑ponged before
+          handle_ping/2 is called
+      end note
+
+      note left of disconnected
+          handle_info/2 runs in all three
+          states. {:stop, ...} terminates
+          the process from any state.
+      end note
   ```
 
   - **`disconnected`** — initial state. On process start, immediately attempts to connect.
