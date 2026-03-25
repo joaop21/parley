@@ -15,7 +15,7 @@ Add `parley` to your list of dependencies in `mix.exs`:
 ```elixir
 def deps do
   [
-    {:parley, "~> 0.1.0"}
+    {:parley, "~> 0.2.0"}
   ]
 end
 ```
@@ -62,9 +62,12 @@ Parley.disconnect(pid)
 
 - `:url` (required) — the WebSocket URL to connect to (`ws://` or `wss://`)
 - `:name` — an optional name for the process (passed to `:gen_statem`)
+- `:headers` — custom headers sent with the WebSocket upgrade request (e.g. `[{"authorization", "Bearer token"}]`)
 - `:connect_timeout` — timeout in milliseconds for the WebSocket upgrade handshake (default: `10_000`)
+- `:transport_opts` — options passed to the transport layer (`:gen_tcp` for `ws://`, `:ssl` for `wss://`)
+- `:protocols` — Mint HTTP protocols to use for the connection (default: `[:http1]`)
 
-The first argument is the initial user state accessible in callbacks.
+The first argument is the initial state passed to `init/1`.
 
 ### Callbacks
 
@@ -72,8 +75,11 @@ All callbacks are optional — default implementations are provided via `use Par
 
 | Callback | Description | Return values |
 |---|---|---|
+| `init(init_arg)` | Called when the process starts, before connecting | `{:ok, state}`, `{:stop, reason}` |
 | `handle_connect(state)` | Called when the WebSocket handshake completes | `{:ok, state}`, `{:push, frame, state}`, `{:stop, reason, state}` |
 | `handle_frame(frame, state)` | Called when a frame is received from the server | `{:ok, state}`, `{:push, frame, state}`, `{:stop, reason, state}` |
+| `handle_ping(payload, state)` | Called when a ping is received (pong sent automatically) | `{:ok, state}`, `{:push, frame, state}`, `{:stop, reason, state}` |
+| `handle_info(message, state)` | Called when a non-WebSocket message is received | `{:ok, state}`, `{:push, frame, state}`, `{:stop, reason, state}` |
 | `handle_disconnect(reason, state)` | Called when the connection is lost or closed | `{:ok, state}` |
 
 - `{:ok, state}` — update state
