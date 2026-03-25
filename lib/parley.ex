@@ -117,10 +117,11 @@ defmodule Parley do
       Transforms the `init_arg` into user state (default: passes it through)
     * `c:handle_connect/1` — called when the WebSocket handshake completes
     * `c:handle_frame/2` — called when a frame is received from the server
+    * `c:handle_ping/2` — called when a ping frame is received (pong is sent automatically)
     * `c:handle_info/2` — called when the process receives a non-WebSocket message
     * `c:handle_disconnect/2` — called when the connection is lost or closed
 
-  `c:handle_connect/1`, `c:handle_frame/2`, and `c:handle_info/2` also support
+  `c:handle_connect/1`, `c:handle_frame/2`, `c:handle_ping/2`, and `c:handle_info/2` also support
   `{:push, frame, state}` to send a frame from within the callback, and
   `{:stop, reason, state}` to stop the process. See the callback docs for details.
   """
@@ -169,6 +170,24 @@ defmodule Parley do
   """
   @callback handle_frame(frame, state) ::
               {:ok, state} | {:push, frame, state} | {:stop, reason :: term(), state}
+
+  @doc """
+  Called when a ping frame is received.
+
+  The pong response is always sent automatically before this callback is
+  invoked, so the WebSocket protocol is never violated. Use this callback
+  to observe pings for heartbeat monitoring, latency tracking, or logging.
+
+  Supported return values:
+
+    * `{:ok, state}` — continue with updated state
+    * `{:push, frame, state}` — send a frame and continue
+    * `{:stop, reason, state}` — gracefully stop the connection
+  """
+  @callback handle_ping(payload :: binary(), state) ::
+              {:ok, state}
+              | {:push, frame, state}
+              | {:stop, reason :: term(), state}
 
   @doc """
   Called when the process receives a message that is not a WebSocket frame.
@@ -221,6 +240,9 @@ defmodule Parley do
       def handle_frame(_frame, state), do: {:ok, state}
 
       @impl true
+      def handle_ping(_payload, state), do: {:ok, state}
+
+      @impl true
       def handle_info(_message, state), do: {:ok, state}
 
       @impl true
@@ -229,6 +251,7 @@ defmodule Parley do
       defoverridable init: 1,
                      handle_connect: 1,
                      handle_frame: 2,
+                     handle_ping: 2,
                      handle_info: 2,
                      handle_disconnect: 2
 

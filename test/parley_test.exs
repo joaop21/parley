@@ -656,6 +656,126 @@ defmodule ParleyTest do
     end
   end
 
+  describe "handle_ping/2" do
+    test "default implementation keeps connection alive", %{url: url} do
+      {:ok, pid} = Client.start_link(%{test_pid: self()}, url: url)
+      assert_receive :connected, 1000
+
+      # Trigger a server-sent ping
+      :ok = Parley.send_frame(pid, {:text, "send_ping"})
+
+      # Connection stays alive — verify by sending another message
+      :ok = Parley.send_frame(pid, {:text, "still alive"})
+      assert_receive {:frame, {:text, "still alive"}}, 1000
+
+      Parley.disconnect(pid)
+    end
+
+    test "receives ping payload for observation", %{url: url} do
+      defmodule PingObserverClient do
+        use Parley
+
+        @impl true
+        def handle_connect(%{test_pid: pid} = state) do
+          send(pid, :connected)
+          {:ok, state}
+        end
+
+        @impl true
+        def handle_ping(payload, %{test_pid: pid} = state) do
+          send(pid, {:ping_received, payload})
+          {:ok, state}
+        end
+
+        @impl true
+        def handle_frame(frame, %{test_pid: pid} = state) do
+          send(pid, {:frame, frame})
+          {:ok, state}
+        end
+
+        @impl true
+        def handle_disconnect(reason, %{test_pid: pid} = state) do
+          send(pid, {:disconnected, reason})
+          {:ok, state}
+        end
+      end
+
+      {:ok, pid} = Parley.start_link(PingObserverClient, %{test_pid: self()}, url: url)
+      assert_receive :connected, 1000
+
+      :ok = Parley.send_frame(pid, {:text, "send_ping:hello"})
+      assert_receive {:ping_received, "hello"}, 1000
+
+      Parley.disconnect(pid)
+    end
+
+    test "returning {:push, frame, state} sends a frame", %{url: url} do
+      defmodule PingPushClient do
+        use Parley
+
+        @impl true
+        def handle_connect(%{test_pid: pid} = state) do
+          send(pid, :connected)
+          {:ok, state}
+        end
+
+        @impl true
+        def handle_ping(_payload, state) do
+          {:push, {:text, "got_ping"}, state}
+        end
+
+        @impl true
+        def handle_frame(frame, %{test_pid: pid} = state) do
+          send(pid, {:frame, frame})
+          {:ok, state}
+        end
+
+        @impl true
+        def handle_disconnect(reason, %{test_pid: pid} = state) do
+          send(pid, {:disconnected, reason})
+          {:ok, state}
+        end
+      end
+
+      {:ok, pid} = Parley.start_link(PingPushClient, %{test_pid: self()}, url: url)
+      assert_receive :connected, 1000
+
+      :ok = Parley.send_frame(pid, {:text, "send_ping"})
+      # The echo server echoes back the text frame pushed by handle_ping
+      assert_receive {:frame, {:text, "got_ping"}}, 1000
+
+      Parley.disconnect(pid)
+    end
+
+    test "returning {:stop, reason, state} stops the process", %{url: url} do
+      defmodule PingStopClient do
+        use Parley
+
+        @impl true
+        def handle_connect(%{test_pid: pid} = state) do
+          send(pid, :connected)
+          {:ok, state}
+        end
+
+        @impl true
+        def handle_ping(_payload, state) do
+          {:stop, :ping_stop, state}
+        end
+
+        @impl true
+        def handle_frame(_frame, state), do: {:ok, state}
+      end
+
+      Process.flag(:trap_exit, true)
+
+      {:ok, pid} = Parley.start_link(PingStopClient, %{test_pid: self()}, url: url)
+      assert_receive :connected, 1000
+
+      :ok = Parley.send_frame(pid, {:text, "send_ping"})
+      assert_receive {:EXIT, ^pid, :ping_stop}, 1000
+    end
+  end
+
   describe "connection options" do
     test "headers are sent during WebSocket upgrade", %{port: port} do
       {:ok, pid} =
