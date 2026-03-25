@@ -192,7 +192,7 @@ defmodule Parley do
   @doc """
   Called when the process receives a message that is not a WebSocket frame.
 
-  This is the equivalent of `GenServer.handle_info/2`. Use it to handle
+  This is the equivalent of GenServer's `handle_info/2`. Use it to handle
   timer messages (`Process.send_after/3`), inter-process messages, and
   any other messages sent directly to the Parley process.
 
