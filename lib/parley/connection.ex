@@ -62,6 +62,8 @@ defmodule Parley.Connection do
   end
 
   def disconnected(:enter, _old_state, data) do
+    if data.conn, do: Mint.HTTP.close(data.conn)
+
     {:ok, user_state} = data.module.handle_disconnect(data.disconnect_reason, data.user_state)
 
     {:keep_state,
@@ -132,8 +134,7 @@ defmodule Parley.Connection do
   end
 
   def connecting(:state_timeout, :connect_timeout, data) do
-    if data.conn, do: Mint.HTTP.close(data.conn)
-    {:next_state, :disconnected, %{data | conn: nil, disconnect_reason: :connect_timeout}}
+    {:next_state, :disconnected, %{data | disconnect_reason: :connect_timeout}}
   end
 
   def connecting(:info, message, data) do
@@ -141,8 +142,8 @@ defmodule Parley.Connection do
       {:ok, conn, responses} ->
         handle_upgrade_responses(%{data | conn: conn}, responses)
 
-      {:error, _conn, reason, _responses} ->
-        {:next_state, :disconnected, %{data | conn: nil, disconnect_reason: {:error, reason}}}
+      {:error, conn, reason, _responses} ->
+        {:next_state, :disconnected, %{data | conn: conn, disconnect_reason: {:error, reason}}}
 
       :unknown ->
         case data.module.handle_info(message, data.user_state) do
@@ -165,8 +166,7 @@ defmodule Parley.Connection do
   end
 
   def connecting({:call, from}, :disconnect, data) do
-    if data.conn, do: Mint.HTTP.close(data.conn)
-    {:next_state, :disconnected, %{data | conn: nil}, [{:reply, from, :ok}]}
+    {:next_state, :disconnected, %{data | disconnect_reason: :closed}, [{:reply, from, :ok}]}
   end
 
   ## :connected state
@@ -199,8 +199,7 @@ defmodule Parley.Connection do
   end
 
   def connected(:internal, :send_failed, data) do
-    if data.conn, do: Mint.HTTP.close(data.conn)
-    {:next_state, :disconnected, %{data | conn: nil}}
+    {:next_state, :disconnected, data}
   end
 
   def connected(:info, message, data) do
@@ -208,8 +207,8 @@ defmodule Parley.Connection do
       {:ok, conn, responses} ->
         handle_data_responses(%{data | conn: conn}, responses)
 
-      {:error, _conn, reason, _responses} ->
-        {:next_state, :disconnected, %{data | conn: nil, disconnect_reason: {:error, reason}}}
+      {:error, conn, reason, _responses} ->
+        {:next_state, :disconnected, %{data | conn: conn, disconnect_reason: {:error, reason}}}
 
       :unknown ->
         handle_info_result(data.module.handle_info(message, data.user_state), data)
@@ -237,19 +236,17 @@ defmodule Parley.Connection do
       {:ok, websocket, encoded} ->
         case Mint.WebSocket.stream_request_body(data.conn, data.request_ref, encoded) do
           {:ok, conn} ->
-            Mint.HTTP.close(conn)
-
-            {:next_state, :disconnected, %{data | conn: nil, websocket: websocket},
+            {:next_state, :disconnected,
+             %{data | conn: conn, websocket: websocket, disconnect_reason: :closed},
              [{:reply, from, :ok}]}
 
           {:error, conn, _reason} ->
-            Mint.HTTP.close(conn)
-            {:next_state, :disconnected, %{data | conn: nil}, [{:reply, from, :ok}]}
+            {:next_state, :disconnected, %{data | conn: conn, disconnect_reason: :closed},
+             [{:reply, from, :ok}]}
         end
 
       {:error, _websocket, _reason} ->
-        if data.conn, do: Mint.HTTP.close(data.conn)
-        {:next_state, :disconnected, %{data | conn: nil}, [{:reply, from, :ok}]}
+        {:next_state, :disconnected, %{data | disconnect_reason: :closed}, [{:reply, from, :ok}]}
     end
   end
 
@@ -280,8 +277,8 @@ defmodule Parley.Connection do
           {:next_state, :connected,
            %{data | conn: conn, websocket: websocket, status: nil, resp_headers: []}}
 
-        {:error, _conn, reason} ->
-          {:next_state, :disconnected, %{data | conn: nil, disconnect_reason: {:error, reason}}}
+        {:error, conn, reason} ->
+          {:next_state, :disconnected, %{data | conn: conn, disconnect_reason: {:error, reason}}}
       end
     else
       {:keep_state, data}
@@ -313,14 +310,11 @@ defmodule Parley.Connection do
             {:keep_state, data}
 
           {:close, code, reason, data} ->
-            Mint.HTTP.close(data.conn)
-
             {:next_state, :disconnected,
-             %{data | conn: nil, disconnect_reason: {:remote_close, code, reason}}}
+             %{data | disconnect_reason: {:remote_close, code, reason}}}
 
           {:close_on_send_error, reason, data} ->
-            if data.conn, do: Mint.HTTP.close(data.conn)
-            {:next_state, :disconnected, %{data | conn: nil, disconnect_reason: {:error, reason}}}
+            {:next_state, :disconnected, %{data | disconnect_reason: {:error, reason}}}
 
           {:stop, reason, data} ->
             if data.conn, do: Mint.HTTP.close(data.conn)
@@ -329,7 +323,7 @@ defmodule Parley.Connection do
 
       {:error, websocket, reason} ->
         {:next_state, :disconnected,
-         %{data | websocket: websocket, conn: nil, disconnect_reason: {:error, reason}}}
+         %{data | websocket: websocket, disconnect_reason: {:error, reason}}}
     end
   end
 
