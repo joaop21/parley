@@ -340,7 +340,8 @@ defmodule Parley.Connection do
         {:halt, {:close, code, reason, data}}
 
       {:ping, payload}, {:ok, data} ->
-        {:cont, {:ok, send_pong(data, payload)}}
+        data = send_pong(data, payload)
+        handle_frame_result(data.module.handle_ping(payload, data.user_state), data)
 
       frame, {:ok, data} ->
         handle_frame_result(data.module.handle_frame(frame, data.user_state), data)

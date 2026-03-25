@@ -22,6 +22,14 @@ defmodule Parley.Test.EchoServer do
       {:reply, :ok, [{:text, "push_this"}], state}
     end
 
+    def handle_in({"send_ping", [opcode: :text]}, state) do
+      {:push, {:ping, "ping"}, state}
+    end
+
+    def handle_in({"send_ping:" <> payload, [opcode: :text]}, state) do
+      {:push, {:ping, payload}, state}
+    end
+
     def handle_in({message, [opcode: :text]}, state) do
       {:reply, :ok, [{:text, message}], state}
     end
