@@ -33,7 +33,7 @@ Parley provides a callback-based API (`use Parley`) backed by a `gen_statem` sta
 @callback handle_frame(frame, state) :: {:ok, state} | {:push, frame, state} | {:stop, reason, state}
 @callback handle_ping(payload, state) :: {:ok, state} | {:push, frame, state} | {:stop, reason, state}
 @callback handle_info(message, state) :: {:ok, state} | {:push, frame, state} | {:stop, reason, state}
-@callback handle_disconnect(reason, state) :: {:ok, state}
+@callback handle_disconnect(reason, state) :: {:ok, state} | {:reconnect, state} | {:disconnect, state}
 ```
 
 ### Connection Options
@@ -46,12 +46,13 @@ Options passed to `Parley.start_link/3` or `Parley.start/3`:
 - `:connect_timeout` — timeout in ms for the WebSocket upgrade handshake (default: `10_000`)
 - `:transport_opts` — options passed to the transport layer (`:gen_tcp` / `:ssl`), for TLS config, timeouts, etc.
 - `:protocols` — Mint HTTP protocols (default: `[:http1]`)
+- `:reconnect` — automatic reconnection with exponential backoff. `false` (default), `true` (defaults: `base_delay: 1_000, max_delay: 30_000, max_retries: :infinity`), or a keyword list with custom values
 
 ### State Machine
 
-- **`:disconnected`** — Initial state. Triggers connection via internal event. Rejects sends with `{:error, :disconnected}`.
+- **`:disconnected`** — Initial state. Triggers connection via internal event. Rejects sends with `{:error, :disconnected}`. When reconnection is enabled, schedules retry with exponential backoff via `handle_disconnect/2` return value and `:reconnect` option.
 - **`:connecting`** — TCP connected, WebSocket upgrade in progress. Sends are postponed (auto-retried on connect).
-- **`:connected`** — Active. Frames flow through callbacks. Pings auto-responded with pong.
+- **`:connected`** — Active. Frames flow through callbacks. Pings auto-responded with pong. Resets reconnect attempt counter to 0 on entry.
 
 ### Dependencies
 
