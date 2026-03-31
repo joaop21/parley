@@ -64,6 +64,11 @@ defmodule Parley do
       (e.g. `[timeout: 5_000, cacertfile: "path/to/ca.pem"]`)
     * `:protocols` — Mint HTTP protocols to use for the connection
       (default: `[:http1]`)
+    * `:reconnect` — controls automatic reconnection with exponential backoff.
+      Accepts `false` (default, no reconnection), `true` (enable with defaults:
+      `base_delay: 1_000`, `max_delay: 30_000`, `max_retries: :infinity`), or a
+      keyword list with custom values for `:base_delay`, `:max_delay`, and
+      `:max_retries`
 
   ## Name registration
 
@@ -84,7 +89,7 @@ defmodule Parley do
       init --> [*]: {:stop, reason}
 
       disconnected --> connecting: TCP connect + WS upgrade
-      disconnected --> [*]: connect / upgrade failure
+      disconnected --> [*]: connect / upgrade failure (reconnect: false)
 
       connecting --> connected: upgrade success
       connecting --> disconnected: error / timeout
@@ -94,6 +99,8 @@ defmodule Parley do
 
       state disconnected {
           [*] --> handle_disconnect
+          handle_disconnect --> maybe_reconnect: {:ok, state} / {:reconnect, state}
+          handle_disconnect --> stay_disconnected: {:disconnect, state}
       }
 
       state connected {
@@ -111,7 +118,7 @@ defmodule Parley do
       end note
 
       note right of connected
-          Pings auto‑ponged before
+          Pings auto-ponged before
           handle_ping/2 is called
       end note
 
@@ -123,12 +130,14 @@ defmodule Parley do
   ```
 
   - **`disconnected`** — initial state. On process start, immediately attempts to connect.
-    Calls `c:handle_disconnect/2` when entering from another state.
+    Calls `c:handle_disconnect/2` when entering from another state. If reconnection is
+    enabled, schedules a reconnect attempt with exponential backoff.
   - **`connecting`** — TCP connection established, waiting for the WebSocket upgrade
     handshake to complete. Frames sent via `send_frame/2` during this state are
     automatically queued and delivered once connected.
   - **`connected`** — WebSocket upgrade complete. Calls `c:handle_connect/1` on entry,
-    then `c:handle_frame/2` for each frame received from the server.
+    then `c:handle_frame/2` for each frame received from the server. Resets the
+    reconnect attempt counter to 0.
 
   ## Callbacks
 
@@ -244,9 +253,15 @@ defmodule Parley do
 
   ## Return values
 
-    * `{:ok, state}` — acknowledge the disconnect
+    * `{:ok, state}` — defer to the configured `:reconnect` option. Reconnects
+      if the option is set, stays disconnected otherwise
+    * `{:reconnect, state}` — force reconnect regardless of the `:reconnect`
+      option. Uses default backoff values if no option was configured
+    * `{:disconnect, state}` — force stay disconnected, overriding the
+      `:reconnect` option
   """
-  @callback handle_disconnect(reason :: term(), state) :: {:ok, state}
+  @callback handle_disconnect(reason :: term(), state) ::
+              {:ok, state} | {:reconnect, state} | {:disconnect, state}
 
   defmacro __using__(_opts) do
     quote do
@@ -325,6 +340,9 @@ defmodule Parley do
       (e.g. `[timeout: 5_000, cacertfile: "path/to/ca.pem"]`)
     * `:protocols` — Mint HTTP protocols to use for the connection
       (default: `[:http1]`)
+    * `:reconnect` — controls automatic reconnection with exponential backoff.
+      Accepts `false` (default), `true` (enable with defaults), or a keyword
+      list with `:base_delay`, `:max_delay`, and `:max_retries`
 
   ## Return values
 
@@ -337,6 +355,7 @@ defmodule Parley do
     {headers, opts} = Keyword.pop(opts, :headers)
     {transport_opts, opts} = Keyword.pop(opts, :transport_opts)
     {protocols, opts} = Keyword.pop(opts, :protocols)
+    {reconnect, opts} = Keyword.pop(opts, :reconnect)
 
     connection_opts =
       Enum.reject(
@@ -344,7 +363,8 @@ defmodule Parley do
           connect_timeout: connect_timeout,
           headers: headers,
           transport_opts: transport_opts,
-          protocols: protocols
+          protocols: protocols,
+          reconnect: reconnect
         ],
         fn {_k, v} -> is_nil(v) end
       )
@@ -366,6 +386,7 @@ defmodule Parley do
     {headers, opts} = Keyword.pop(opts, :headers)
     {transport_opts, opts} = Keyword.pop(opts, :transport_opts)
     {protocols, opts} = Keyword.pop(opts, :protocols)
+    {reconnect, opts} = Keyword.pop(opts, :reconnect)
 
     connection_opts =
       Enum.reject(
@@ -373,7 +394,8 @@ defmodule Parley do
           connect_timeout: connect_timeout,
           headers: headers,
           transport_opts: transport_opts,
-          protocols: protocols
+          protocols: protocols,
+          reconnect: reconnect
         ],
         fn {_k, v} -> is_nil(v) end
       )
@@ -431,6 +453,7 @@ defmodule Parley do
 
   Sends a WebSocket close frame and transitions the process to the
   `:disconnected` state. The process remains alive after disconnecting.
+  If a reconnect timer is pending, it is cancelled.
 
   ## Examples
 

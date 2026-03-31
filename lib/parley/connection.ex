@@ -6,6 +6,7 @@ defmodule Parley.Connection do
   @behaviour :gen_statem
 
   @default_connect_timeout 10_000
+  @default_reconnect_opts [base_delay: 1_000, max_delay: 30_000, max_retries: :infinity]
 
   defstruct [
     :conn,
@@ -14,13 +15,16 @@ defmodule Parley.Connection do
     :uri,
     :module,
     :user_state,
+    :reconnect_timer,
     connect_timeout: @default_connect_timeout,
     headers: [],
     transport_opts: [],
     protocols: [:http1],
     status: nil,
     resp_headers: [],
-    disconnect_reason: :closed
+    disconnect_reason: :closed,
+    reconnect: false,
+    reconnect_attempt: 0
   ]
 
   ## gen_statem callbacks
@@ -37,6 +41,7 @@ defmodule Parley.Connection do
         headers = Keyword.get(opts, :headers, [])
         transport_opts = Keyword.get(opts, :transport_opts, [])
         protocols = Keyword.get(opts, :protocols, [:http1])
+        reconnect = parse_reconnect(Keyword.get(opts, :reconnect, false))
 
         data = %__MODULE__{
           uri: uri,
@@ -45,7 +50,8 @@ defmodule Parley.Connection do
           connect_timeout: connect_timeout,
           headers: headers,
           transport_opts: transport_opts,
-          protocols: protocols
+          protocols: protocols,
+          reconnect: reconnect
         }
 
         {:ok, :disconnected, data, [{:next_event, :internal, :connect}]}
@@ -64,44 +70,65 @@ defmodule Parley.Connection do
   def disconnected(:enter, _old_state, data) do
     if data.conn, do: Mint.HTTP.close(data.conn)
 
-    {:ok, user_state} = data.module.handle_disconnect(data.disconnect_reason, data.user_state)
+    data = %{
+      data
+      | conn: nil,
+        websocket: nil,
+        request_ref: nil,
+        status: nil,
+        resp_headers: []
+    }
 
-    {:keep_state,
-     %{
-       data
-       | user_state: user_state,
-         conn: nil,
-         websocket: nil,
-         request_ref: nil,
-         status: nil,
-         resp_headers: [],
-         disconnect_reason: :closed
-     }}
+    case data.module.handle_disconnect(data.disconnect_reason, data.user_state) do
+      {:reconnect, user_state} ->
+        maybe_reconnect(:reconnect, %{data | user_state: user_state, disconnect_reason: :closed})
+
+      {:disconnect, user_state} ->
+        {:keep_state, %{data | user_state: user_state, disconnect_reason: :closed}}
+
+      {:ok, user_state} ->
+        maybe_reconnect(:ok, %{data | user_state: user_state, disconnect_reason: :closed})
+    end
   end
 
   def disconnected(:internal, :connect, data) do
-    %{uri: uri} = data
+    case do_connect(data) do
+      {:ok, conn, request_ref} ->
+        {:next_state, :connecting, %{data | conn: conn, request_ref: request_ref}}
 
-    http_scheme = ws_to_http_scheme(uri.scheme)
-    port = uri.port || default_port(uri.scheme)
+      {:error, reason, data} ->
+        {:stop, {:error, reason}, data}
+    end
+  end
 
-    ws_scheme = ws_scheme(uri.scheme)
-    path = (uri.path || "/") <> if(uri.query, do: "?#{uri.query}", else: "")
+  def disconnected(:internal, :connect_failed, data) do
+    case data.module.handle_disconnect(data.disconnect_reason, data.user_state) do
+      {:reconnect, user_state} ->
+        maybe_reconnect(:reconnect, %{data | user_state: user_state, disconnect_reason: :closed})
 
-    connect_opts = [protocols: data.protocols, transport_opts: data.transport_opts]
+      {:disconnect, user_state} ->
+        {:keep_state, %{data | user_state: user_state, disconnect_reason: :closed}}
 
-    with {:ok, conn} <- Mint.HTTP.connect(http_scheme, uri.host, port, connect_opts),
-         {:ok, conn, request_ref} <- Mint.WebSocket.upgrade(ws_scheme, conn, path, data.headers) do
-      {:next_state, :connecting, %{data | conn: conn, request_ref: request_ref}}
+      {:ok, user_state} ->
+        maybe_reconnect(:ok, %{data | user_state: user_state, disconnect_reason: :closed})
+    end
+  end
+
+  def disconnected(:info, :reconnect, data) do
+    # Stale message -- timer was cancelled
+    if data.reconnect_timer == nil do
+      :keep_state_and_data
     else
-      # connect/3 fails
-      {:error, reason} ->
-        {:stop, {:error, reason}, data}
+      data = %{data | reconnect_timer: nil}
 
-      # upgrade/4 fails
-      {:error, conn, reason} ->
-        Mint.HTTP.close(conn)
-        {:stop, {:error, reason}, data}
+      case do_connect(data) do
+        {:ok, conn, request_ref} ->
+          {:next_state, :connecting, %{data | conn: conn, request_ref: request_ref}}
+
+        {:error, reason, data} ->
+          {:keep_state, %{data | disconnect_reason: {:error, reason}},
+           [{:next_event, :internal, :connect_failed}]}
+      end
     end
   end
 
@@ -123,8 +150,9 @@ defmodule Parley.Connection do
     {:keep_state_and_data, [{:reply, from, {:error, :disconnected}}]}
   end
 
-  def disconnected({:call, from}, :disconnect, _data) do
-    {:keep_state_and_data, [{:reply, from, :ok}]}
+  def disconnected({:call, from}, :disconnect, data) do
+    data = cancel_reconnect_timer(data)
+    {:keep_state, data, [{:reply, from, :ok}]}
   end
 
   ## :connecting state
@@ -172,6 +200,8 @@ defmodule Parley.Connection do
   ## :connected state
 
   def connected(:enter, :connecting, data) do
+    data = %{data | reconnect_attempt: 0, reconnect_timer: nil}
+
     case data.module.handle_connect(data.user_state) do
       {:ok, user_state} ->
         {:keep_state, %{data | user_state: user_state}}
@@ -251,6 +281,78 @@ defmodule Parley.Connection do
   end
 
   ## Private helpers
+
+  defp parse_reconnect(false), do: false
+  defp parse_reconnect(true), do: @default_reconnect_opts
+
+  defp parse_reconnect(opts) when is_list(opts) do
+    Keyword.merge(@default_reconnect_opts, opts)
+  end
+
+  defp do_connect(data) do
+    %{uri: uri} = data
+
+    http_scheme = ws_to_http_scheme(uri.scheme)
+    port = uri.port || default_port(uri.scheme)
+
+    ws_scheme = ws_scheme(uri.scheme)
+    path = (uri.path || "/") <> if(uri.query, do: "?#{uri.query}", else: "")
+
+    connect_opts = [protocols: data.protocols, transport_opts: data.transport_opts]
+
+    with {:ok, conn} <- Mint.HTTP.connect(http_scheme, uri.host, port, connect_opts),
+         {:ok, conn, request_ref} <- Mint.WebSocket.upgrade(ws_scheme, conn, path, data.headers) do
+      {:ok, conn, request_ref}
+    else
+      {:error, reason} ->
+        {:error, reason, data}
+
+      {:error, conn, reason} ->
+        Mint.HTTP.close(conn)
+        {:error, reason, data}
+    end
+  end
+
+  defp maybe_reconnect(callback_return, data) do
+    reconnect_opts = effective_reconnect_opts(callback_return, data.reconnect)
+
+    if reconnect_opts do
+      max_retries = Keyword.fetch!(reconnect_opts, :max_retries)
+
+      if max_retries != :infinity and data.reconnect_attempt >= max_retries do
+        {:stop, {:error, :max_retries_exceeded}, data}
+      else
+        base_delay = Keyword.fetch!(reconnect_opts, :base_delay)
+        max_delay = Keyword.fetch!(reconnect_opts, :max_delay)
+        delay = calculate_delay(base_delay, max_delay, data.reconnect_attempt)
+
+        timer = Process.send_after(self(), :reconnect, delay)
+
+        {:keep_state,
+         %{data | reconnect_timer: timer, reconnect_attempt: data.reconnect_attempt + 1}}
+      end
+    else
+      {:keep_state, data}
+    end
+  end
+
+  defp effective_reconnect_opts(:reconnect, false), do: @default_reconnect_opts
+  defp effective_reconnect_opts(:reconnect, opts) when is_list(opts), do: opts
+  defp effective_reconnect_opts(:ok, false), do: nil
+  defp effective_reconnect_opts(:ok, opts) when is_list(opts), do: opts
+
+  defp calculate_delay(base_delay, max_delay, attempt) do
+    delay = min(base_delay * Integer.pow(2, attempt), max_delay)
+    half = max(div(delay, 2), 1)
+    half + :rand.uniform(half)
+  end
+
+  defp cancel_reconnect_timer(%{reconnect_timer: nil} = data), do: data
+
+  defp cancel_reconnect_timer(%{reconnect_timer: timer} = data) do
+    Process.cancel_timer(timer)
+    %{data | reconnect_timer: nil}
+  end
 
   # Mint.HTTP.t() is opaque so Dialyzer can't prove Mint.WebSocket.new/4
   # can return {:ok, ...} through the opaque boundary.
