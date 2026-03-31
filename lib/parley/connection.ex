@@ -97,7 +97,12 @@ defmodule Parley.Connection do
         {:next_state, :connecting, %{data | conn: conn, request_ref: request_ref}}
 
       {:error, reason, data} ->
-        {:stop, {:error, reason}, data}
+        if data.reconnect == false do
+          {:stop, {:error, reason}, data}
+        else
+          {:keep_state, %{data | disconnect_reason: {:error, reason}},
+           [{:next_event, :internal, :connect_failed}]}
+        end
     end
   end
 
