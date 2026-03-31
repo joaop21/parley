@@ -237,7 +237,7 @@ defmodule Parley.Connection do
       {:disconnect, reason, user_state} ->
         data = %{data | user_state: user_state, disconnect_reason: reason}
         data = send_close(data)
-        {:keep_state, data, [{:next_event, :internal, :user_disconnect}]}
+        {:keep_state, data, [{:state_timeout, 0, :user_disconnect}]}
 
       {:stop, reason, user_state} ->
         if data.conn, do: Mint.HTTP.close(data.conn)
@@ -245,7 +245,7 @@ defmodule Parley.Connection do
     end
   end
 
-  def connected(:internal, :user_disconnect, data) do
+  def connected(:state_timeout, :user_disconnect, data) do
     {:next_state, :disconnected, data}
   end
 
