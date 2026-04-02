@@ -29,10 +29,10 @@ Parley provides a callback-based API (`use Parley`) backed by a `gen_statem` sta
 
 ```elixir
 @callback init(init_arg) :: {:ok, state} | {:stop, reason}
-@callback handle_connect(state) :: {:ok, state} | {:push, frame, state} | {:stop, reason, state}
-@callback handle_frame(frame, state) :: {:ok, state} | {:push, frame, state} | {:stop, reason, state}
-@callback handle_ping(payload, state) :: {:ok, state} | {:push, frame, state} | {:stop, reason, state}
-@callback handle_info(message, state) :: {:ok, state} | {:push, frame, state} | {:stop, reason, state}
+@callback handle_connect(state) :: {:ok, state} | {:push, frame, state} | {:disconnect, reason, state} | {:stop, reason, state}
+@callback handle_frame(frame, state) :: {:ok, state} | {:push, frame, state} | {:disconnect, reason, state} | {:stop, reason, state}
+@callback handle_ping(payload, state) :: {:ok, state} | {:push, frame, state} | {:disconnect, reason, state} | {:stop, reason, state}
+@callback handle_info(message, state) :: {:ok, state} | {:push, frame, state} | {:disconnect, reason, state} | {:stop, reason, state}
 @callback handle_disconnect(reason, state) :: {:ok, state} | {:reconnect, state} | {:disconnect, state}
 ```
 

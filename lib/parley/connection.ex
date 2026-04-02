@@ -146,6 +146,9 @@ defmodule Parley.Connection do
         Logger.warning("Ignoring {:push, ...} from handle_info/2 while disconnected")
         {:keep_state, %{data | user_state: user_state}}
 
+      {:disconnect, _reason, user_state} ->
+        {:keep_state, %{data | user_state: user_state}}
+
       {:stop, reason, user_state} ->
         {:stop, reason, %{data | user_state: user_state}}
     end
@@ -187,6 +190,10 @@ defmodule Parley.Connection do
             Logger.warning("Ignoring {:push, ...} from handle_info/2 while connecting")
             {:keep_state, %{data | user_state: user_state}}
 
+          {:disconnect, reason, user_state} ->
+            {:next_state, :disconnected,
+             %{data | user_state: user_state, disconnect_reason: reason}}
+
           {:stop, reason, user_state} ->
             if data.conn, do: Mint.HTTP.close(data.conn)
             {:stop, reason, %{data | user_state: user_state, conn: nil}}
@@ -227,10 +234,22 @@ defmodule Parley.Connection do
              [{:next_event, :internal, :send_failed}]}
         end
 
+      # Enter callbacks cannot perform state transitions or emit internal
+      # events, so we schedule an immediate state timeout to transition
+      # to :disconnected on the next step.
+      {:disconnect, reason, user_state} ->
+        data = %{data | user_state: user_state, disconnect_reason: reason}
+        data = send_close(data)
+        {:keep_state, data, [{:state_timeout, 0, :user_disconnect}]}
+
       {:stop, reason, user_state} ->
         if data.conn, do: Mint.HTTP.close(data.conn)
         {:stop, reason, %{data | user_state: user_state, conn: nil}}
     end
+  end
+
+  def connected(:state_timeout, :user_disconnect, data) do
+    {:next_state, :disconnected, data}
   end
 
   def connected(:internal, :send_failed, data) do
@@ -423,6 +442,9 @@ defmodule Parley.Connection do
           {:close_on_send_error, reason, data} ->
             {:next_state, :disconnected, %{data | disconnect_reason: {:error, reason}}}
 
+          {:disconnect, reason, data} ->
+            {:next_state, :disconnected, %{data | disconnect_reason: reason}}
+
           {:stop, reason, data} ->
             if data.conn, do: Mint.HTTP.close(data.conn)
             {:stop, reason, %{data | conn: nil}}
@@ -469,6 +491,11 @@ defmodule Parley.Connection do
     end
   end
 
+  defp handle_frame_result({:disconnect, reason, user_state}, data) do
+    data = send_close(data)
+    {:halt, {:disconnect, reason, %{data | user_state: user_state}}}
+  end
+
   defp handle_frame_result({:stop, reason, user_state}, data) do
     {:halt, {:stop, reason, %{data | user_state: user_state}}}
   end
@@ -492,6 +519,12 @@ defmodule Parley.Connection do
         {:keep_state, %{data | disconnect_reason: {:error, reason}},
          [{:next_event, :internal, :send_failed}]}
     end
+  end
+
+  defp handle_info_result({:disconnect, reason, user_state}, data) do
+    data = %{data | user_state: user_state}
+    data = send_close(data)
+    {:next_state, :disconnected, %{data | disconnect_reason: reason}}
   end
 
   defp handle_info_result({:stop, reason, user_state}, data) do

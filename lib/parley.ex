@@ -153,7 +153,8 @@ defmodule Parley do
     * `c:handle_disconnect/2` — called when the connection is lost or closed
 
   `c:handle_connect/1`, `c:handle_frame/2`, `c:handle_ping/2`, and `c:handle_info/2` also support
-  `{:push, frame, state}` to send a frame from within the callback, and
+  `{:push, frame, state}` to send a frame from within the callback,
+  `{:disconnect, reason, state}` to gracefully close the connection while keeping the process alive, and
   `{:stop, reason, state}` to stop the process. See the callback docs for details.
   """
 
@@ -185,10 +186,15 @@ defmodule Parley do
     * `{:ok, state}` — update state, remain connected
     * `{:push, frame, state}` — send a frame immediately after connecting
       (useful for auth or subscribe messages)
+    * `{:disconnect, reason, state}` — close the connection gracefully but
+      keep the process alive. The reason is passed to `c:handle_disconnect/2`
     * `{:stop, reason, state}` — reject the connection, stop the process
   """
   @callback handle_connect(state) ::
-              {:ok, state} | {:push, frame, state} | {:stop, reason :: term(), state}
+              {:ok, state}
+              | {:push, frame, state}
+              | {:disconnect, reason :: term(), state}
+              | {:stop, reason :: term(), state}
 
   @doc """
   Called when a frame is received from the server.
@@ -197,10 +203,15 @@ defmodule Parley do
 
     * `{:ok, state}` — update state
     * `{:push, frame, state}` — send a frame back to the server
+    * `{:disconnect, reason, state}` — close the connection gracefully but
+      keep the process alive. The reason is passed to `c:handle_disconnect/2`
     * `{:stop, reason, state}` — close the connection and stop the process
   """
   @callback handle_frame(frame, state) ::
-              {:ok, state} | {:push, frame, state} | {:stop, reason :: term(), state}
+              {:ok, state}
+              | {:push, frame, state}
+              | {:disconnect, reason :: term(), state}
+              | {:stop, reason :: term(), state}
 
   @doc """
   Called when a ping frame is received.
@@ -209,15 +220,18 @@ defmodule Parley do
   invoked, so the WebSocket protocol is never violated. Use this callback
   to observe pings for heartbeat monitoring, latency tracking, or logging.
 
-  Supported return values:
+  ## Return values
 
     * `{:ok, state}` — continue with updated state
     * `{:push, frame, state}` — send a frame and continue
+    * `{:disconnect, reason, state}` — close the connection gracefully but
+      keep the process alive. The reason is passed to `c:handle_disconnect/2`
     * `{:stop, reason, state}` — gracefully stop the connection
   """
   @callback handle_ping(payload :: binary(), state) ::
               {:ok, state}
               | {:push, frame, state}
+              | {:disconnect, reason :: term(), state}
               | {:stop, reason :: term(), state}
 
   @doc """
@@ -236,10 +250,16 @@ defmodule Parley do
 
     * `{:ok, state}` — update state
     * `{:push, frame, state}` — send a frame to the server (connected only)
+    * `{:disconnect, reason, state}` — close the connection gracefully but
+      keep the process alive. The reason is passed to `c:handle_disconnect/2`.
+      While already disconnected, the state is updated but no transition occurs
     * `{:stop, reason, state}` — stop the process
   """
   @callback handle_info(message :: term(), state) ::
-              {:ok, state} | {:push, frame, state} | {:stop, reason :: term(), state}
+              {:ok, state}
+              | {:push, frame, state}
+              | {:disconnect, reason :: term(), state}
+              | {:stop, reason :: term(), state}
 
   @doc """
   Called when the connection is lost or closed.
@@ -250,6 +270,7 @@ defmodule Parley do
     * `{:remote_close, code, reason}` — server-initiated close frame
     * `{:error, reason}` — stream or decode error
     * `:connect_timeout` — WebSocket upgrade handshake timed out
+    * any user-provided term — from a `{:disconnect, reason, state}` callback return
 
   ## Return values
 
