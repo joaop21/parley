@@ -220,7 +220,7 @@ defmodule Parley do
   invoked, so the WebSocket protocol is never violated. Use this callback
   to observe pings for heartbeat monitoring, latency tracking, or logging.
 
-  Supported return values:
+  ## Return values
 
     * `{:ok, state}` — continue with updated state
     * `{:push, frame, state}` — send a frame and continue

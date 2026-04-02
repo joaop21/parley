@@ -190,9 +190,9 @@ defmodule Parley.Connection do
             Logger.warning("Ignoring {:push, ...} from handle_info/2 while connecting")
             {:keep_state, %{data | user_state: user_state}}
 
-          {:disconnect, _reason, user_state} ->
-            Logger.warning("Ignoring {:disconnect, ...} from handle_info/2 while connecting")
-            {:keep_state, %{data | user_state: user_state}}
+          {:disconnect, reason, user_state} ->
+            {:next_state, :disconnected,
+             %{data | user_state: user_state, disconnect_reason: reason}}
 
           {:stop, reason, user_state} ->
             if data.conn, do: Mint.HTTP.close(data.conn)
@@ -234,6 +234,9 @@ defmodule Parley.Connection do
              [{:next_event, :internal, :send_failed}]}
         end
 
+      # Enter callbacks cannot perform state transitions or emit internal
+      # events, so we schedule an immediate state timeout to transition
+      # to :disconnected on the next step.
       {:disconnect, reason, user_state} ->
         data = %{data | user_state: user_state, disconnect_reason: reason}
         data = send_close(data)
