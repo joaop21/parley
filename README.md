@@ -66,6 +66,7 @@ Parley.disconnect(pid)
 - `:connect_timeout` — timeout in milliseconds for the WebSocket upgrade handshake (default: `10_000`)
 - `:transport_opts` — options passed to the transport layer (`:gen_tcp` for `ws://`, `:ssl` for `wss://`)
 - `:protocols` — Mint HTTP protocols to use for the connection (default: `[:http1]`)
+- `:reconnect` — controls automatic reconnection with exponential backoff. Accepts `false` (default, no reconnection), `true` (enable with defaults: `base_delay: 1_000`, `max_delay: 30_000`, `max_retries: :infinity`), or a keyword list with custom values for `:base_delay`, `:max_delay`, and `:max_retries`
 
 The first argument is the initial state passed to `init/1`.
 
