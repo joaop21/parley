@@ -101,7 +101,6 @@ defmodule Parley do
           [*] --> handle_disconnect
           handle_disconnect --> reconnecting: {:ok, state} / {:reconnect, state}
           handle_disconnect --> stay_disconnected: {:disconnect, state}
-          reconnecting --> [*]
       }
 
       state connected {
