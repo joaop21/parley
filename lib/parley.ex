@@ -94,13 +94,14 @@ defmodule Parley do
       connecting --> connected: upgrade success
       connecting --> disconnected: error / timeout
 
-      connected --> disconnected: error / close / disconnect/1
+      connected --> disconnected: error / close / disconnect/1 / {:disconnect, ...}
       connected --> [*]: callback {:stop, ...}
 
       state disconnected {
           [*] --> handle_disconnect
-          handle_disconnect --> maybe_reconnect: {:ok, state} / {:reconnect, state}
+          handle_disconnect --> reconnecting: {:ok, state} / {:reconnect, state}
           handle_disconnect --> stay_disconnected: {:disconnect, state}
+          reconnecting --> [*]
       }
 
       state connected {
@@ -110,6 +111,8 @@ defmodule Parley do
           handle_frame --> waiting
           waiting --> handle_ping: ping received
           handle_ping --> waiting
+          waiting --> handle_info: process message
+          handle_info --> waiting
       }
 
       note right of connecting
@@ -123,9 +126,11 @@ defmodule Parley do
       end note
 
       note left of disconnected
-          handle_info/2 runs in all three
-          states. {:stop, ...} terminates
-          the process from any state.
+          handle_info/2 runs in all states.
+          {:disconnect, ...} transitions to
+          disconnected from any callback.
+          {:stop, ...} terminates the process
+          from any state.
       end note
   ```
 
