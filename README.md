@@ -77,15 +77,18 @@ All callbacks are optional — default implementations are provided via `use Par
 | Callback | Description | Return values |
 |---|---|---|
 | `init(init_arg)` | Called when the process starts, before connecting | `{:ok, state}`, `{:stop, reason}` |
-| `handle_connect(state)` | Called when the WebSocket handshake completes | `{:ok, state}`, `{:push, frame, state}`, `{:stop, reason, state}` |
-| `handle_frame(frame, state)` | Called when a frame is received from the server | `{:ok, state}`, `{:push, frame, state}`, `{:stop, reason, state}` |
-| `handle_ping(payload, state)` | Called when a ping is received (pong sent automatically) | `{:ok, state}`, `{:push, frame, state}`, `{:stop, reason, state}` |
-| `handle_info(message, state)` | Called when a non-WebSocket message is received | `{:ok, state}`, `{:push, frame, state}`, `{:stop, reason, state}` |
-| `handle_disconnect(reason, state)` | Called when the connection is lost or closed | `{:ok, state}` |
+| `handle_connect(state)` | Called when the WebSocket handshake completes | `{:ok, state}`, `{:push, frame, state}`, `{:disconnect, reason, state}`, `{:stop, reason, state}` |
+| `handle_frame(frame, state)` | Called when a frame is received from the server | `{:ok, state}`, `{:push, frame, state}`, `{:disconnect, reason, state}`, `{:stop, reason, state}` |
+| `handle_ping(payload, state)` | Called when a ping is received (pong sent automatically) | `{:ok, state}`, `{:push, frame, state}`, `{:disconnect, reason, state}`, `{:stop, reason, state}` |
+| `handle_info(message, state)` | Called when a non-WebSocket message is received | `{:ok, state}`, `{:push, frame, state}`, `{:disconnect, reason, state}`, `{:stop, reason, state}` |
+| `handle_disconnect(reason, state)` | Called when the connection is lost or closed | `{:ok, state}`, `{:reconnect, state}`, `{:disconnect, state}` |
 
 - `{:ok, state}` — update state
 - `{:push, frame, state}` — send a frame from within the callback
+- `{:disconnect, reason, state}` — close the connection gracefully but keep the process alive
 - `{:stop, reason, state}` — stop the process
+- `{:reconnect, state}` — force reconnect (`handle_disconnect` only)
+- `{:disconnect, state}` — force stay disconnected (`handle_disconnect` only)
 
 ### Frame Types
 
