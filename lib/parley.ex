@@ -143,6 +143,10 @@ defmodule Parley do
     then `c:handle_frame/2` for each frame received from the server. Resets the
     reconnect attempt counter to 0.
 
+  ### Interactive demo
+
+  <div id="parley-demo"></div>
+
   ## Callbacks
 
   All callbacks are optional and have default implementations. Override only
