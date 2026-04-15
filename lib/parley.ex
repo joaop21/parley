@@ -478,6 +478,23 @@ defmodule Parley do
   end
 
   @doc """
+  Sends a WebSocket frame to the server asynchronously (fire-and-forget).
+
+  Unlike `send_frame/2`, this does not wait for confirmation that the frame
+  was sent. It always returns `:ok` immediately. If the connection is not
+  in the `:connected` state, the frame is silently dropped.
+
+  ## Examples
+
+      :ok = Parley.send_frame_async(pid, {:text, "hello"})
+
+  """
+  @spec send_frame_async(:gen_statem.server_ref(), frame()) :: :ok
+  def send_frame_async(server, frame) do
+    :gen_statem.cast(server, {:send, frame})
+  end
+
+  @doc """
   Gracefully disconnects from the WebSocket server.
 
   Sends a WebSocket close frame and transitions the process to the
