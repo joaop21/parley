@@ -843,6 +843,81 @@ defmodule ParleyTest do
     end
   end
 
+  describe "large frames" do
+    test "echoes a large text frame", %{url: url} do
+      {:ok, pid} = Client.start_link(%{test_pid: self()}, url: url)
+      assert_receive :connected, 1000
+
+      large_text = String.duplicate("a", 100_000)
+      :ok = Parley.send_frame(pid, {:text, large_text})
+      assert_receive {:frame, {:text, ^large_text}}, 5000
+
+      Parley.disconnect(pid)
+    end
+
+    test "echoes a large binary frame", %{url: url} do
+      {:ok, pid} = Client.start_link(%{test_pid: self()}, url: url)
+      assert_receive :connected, 1000
+
+      large_binary = :crypto.strong_rand_bytes(100_000)
+      :ok = Parley.send_frame(pid, {:binary, large_binary})
+      assert_receive {:frame, {:binary, ^large_binary}}, 5000
+
+      Parley.disconnect(pid)
+    end
+  end
+
+  describe "concurrent sends" do
+    test "multiple callers can send frames concurrently", %{url: url} do
+      {:ok, pid} = Client.start_link(%{test_pid: self()}, url: url)
+      assert_receive :connected, 1000
+
+      tasks =
+        for i <- 1..10 do
+          Task.async(fn ->
+            Parley.send_frame(pid, {:text, "msg-#{i}"})
+          end)
+        end
+
+      results = Task.await_many(tasks, 5000)
+      assert Enum.all?(results, &(&1 == :ok))
+
+      messages =
+        for _ <- 1..10 do
+          assert_receive {:frame, {:text, msg}}, 1000
+          msg
+        end
+
+      for i <- 1..10 do
+        assert "msg-#{i}" in messages
+      end
+
+      Parley.disconnect(pid)
+    end
+  end
+
+  describe "disconnect during connecting" do
+    test "disconnect while still in connecting state returns ok" do
+      # Start a TCP server that accepts connections but never responds
+      {:ok, listen} = :gen_tcp.listen(0, [:binary, active: false, reuseaddr: true])
+      {:ok, port} = :inet.port(listen)
+
+      {:ok, pid} =
+        Client.start_link(%{test_pid: self()},
+          url: "ws://127.0.0.1:#{port}/ws",
+          connect_timeout: 5000
+        )
+
+      # Disconnect immediately while still in :connecting state
+      assert :ok = Parley.disconnect(pid)
+      assert_receive {:disconnected, :closed}, 1000
+
+      assert Process.alive?(pid)
+      Parley.disconnect(pid)
+      :gen_tcp.close(listen)
+    end
+  end
+
   describe "options validation" do
     test "start_link without :url raises KeyError" do
       assert_raise KeyError, ~r/key :url not found/, fn ->
