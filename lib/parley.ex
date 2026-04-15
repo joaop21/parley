@@ -115,8 +115,8 @@ defmodule Parley do
       }
 
       note right of connecting
-          send_frame/2 calls are queued
-          and replayed on connect
+          send_frame/2 and send_frame_async/2
+          are queued and replayed on connect
       end note
 
       note right of connected
@@ -137,8 +137,8 @@ defmodule Parley do
     Calls `c:handle_disconnect/2` when entering from another state. If reconnection is
     enabled, schedules a reconnect attempt with exponential backoff.
   - **`connecting`** — TCP connection established, waiting for the WebSocket upgrade
-    handshake to complete. Frames sent via `send_frame/2` during this state are
-    automatically queued and delivered once connected.
+    handshake to complete. Frames sent via `send_frame/2` or `send_frame_async/2`
+    during this state are automatically queued and delivered once connected.
   - **`connected`** — WebSocket upgrade complete. Calls `c:handle_connect/1` on entry,
     then `c:handle_frame/2` for each frame received from the server. Resets the
     reconnect attempt counter to 0.
@@ -481,8 +481,11 @@ defmodule Parley do
   Sends a WebSocket frame to the server asynchronously (fire-and-forget).
 
   Unlike `send_frame/2`, this does not wait for confirmation that the frame
-  was sent. It always returns `:ok` immediately. If the connection is not
-  in the `:connected` state, the frame is silently dropped.
+  was sent. It always returns `:ok` immediately.
+
+  While in the `:connecting` state, the frame is queued and delivered once
+  the connection completes (same as `send_frame/2`). If the process is in
+  the `:disconnected` state, the frame is silently dropped.
 
   ## Examples
 

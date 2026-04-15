@@ -300,8 +300,9 @@ defmodule Parley.Connection do
           {:ok, conn} ->
             {:keep_state, %{data | conn: conn, websocket: websocket}}
 
-          {:error, conn, _reason} ->
-            {:next_state, :disconnected, %{data | conn: conn}}
+          {:error, conn, reason} ->
+            {:next_state, :disconnected,
+             %{data | conn: conn, disconnect_reason: {:error, reason}}}
         end
 
       {:error, websocket, reason} ->

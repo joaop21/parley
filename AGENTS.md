@@ -50,7 +50,7 @@ Options passed to `Parley.start_link/3` or `Parley.start/3`:
 
 ### State Machine
 
-- **`:disconnected`** — Initial state. Triggers connection via internal event. Rejects sends with `{:error, :disconnected}`. When reconnection is enabled, schedules retry with exponential backoff via `handle_disconnect/2` return value and `:reconnect` option.
+- **`:disconnected`** — Initial state. Triggers connection via internal event. `send_frame/2` returns `{:error, :disconnected}`; `send_frame_async/2` silently drops the frame. When reconnection is enabled, schedules retry with exponential backoff via `handle_disconnect/2` return value and `:reconnect` option.
 - **`:connecting`** — TCP connected, WebSocket upgrade in progress. Sends are postponed (auto-retried on connect).
 - **`:connected`** — Active. Frames flow through callbacks. Pings auto-responded with pong. Resets reconnect attempt counter to 0 on entry.
 
