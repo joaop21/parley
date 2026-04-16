@@ -158,6 +158,10 @@ defmodule Parley.Connection do
     {:keep_state_and_data, [{:reply, from, {:error, :disconnected}}]}
   end
 
+  def disconnected(:cast, {:send, _frame}, _data) do
+    :keep_state_and_data
+  end
+
   def disconnected({:call, from}, :disconnect, data) do
     data = cancel_reconnect_timer(data)
     {:keep_state, data, [{:reply, from, :ok}]}
@@ -202,6 +206,10 @@ defmodule Parley.Connection do
   end
 
   def connecting({:call, _from}, {:send, _frame}, _data) do
+    {:keep_state_and_data, [:postpone]}
+  end
+
+  def connecting(:cast, {:send, _frame}, _data) do
     {:keep_state_and_data, [:postpone]}
   end
 
@@ -282,6 +290,24 @@ defmodule Parley.Connection do
 
       {:error, websocket, reason} ->
         {:keep_state, %{data | websocket: websocket}, [{:reply, from, {:error, reason}}]}
+    end
+  end
+
+  def connected(:cast, {:send, frame}, data) do
+    case Mint.WebSocket.encode(data.websocket, frame) do
+      {:ok, websocket, encoded} ->
+        case Mint.WebSocket.stream_request_body(data.conn, data.request_ref, encoded) do
+          {:ok, conn} ->
+            {:keep_state, %{data | conn: conn, websocket: websocket}}
+
+          {:error, conn, reason} ->
+            {:next_state, :disconnected,
+             %{data | conn: conn, disconnect_reason: {:error, reason}}}
+        end
+
+      {:error, websocket, reason} ->
+        Logger.warning("Failed to encode async frame: #{inspect(reason)}")
+        {:keep_state, %{data | websocket: websocket}}
     end
   end
 

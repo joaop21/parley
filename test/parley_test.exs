@@ -60,6 +60,65 @@ defmodule ParleyTest do
     end
   end
 
+  describe "async sending" do
+    test "send_frame_async sends frame and returns :ok immediately", %{url: url} do
+      {:ok, pid} = Client.start_link(%{test_pid: self()}, url: url)
+      assert_receive :connected, 1000
+
+      assert :ok = Parley.send_frame_async(pid, {:text, "async hello"})
+      assert_receive {:frame, {:text, "async hello"}}, 1000
+
+      Parley.disconnect(pid)
+    end
+
+    test "send_frame_async returns :ok when disconnected", %{url: url} do
+      {:ok, pid} = Client.start_link(%{test_pid: self()}, url: url)
+      assert_receive :connected, 1000
+
+      :ok = Parley.disconnect(pid)
+      assert_receive {:disconnected, :closed}, 1000
+
+      # Should return :ok (fire-and-forget) even when disconnected
+      assert :ok = Parley.send_frame_async(pid, {:text, "dropped"})
+    end
+
+    test "send_frame_async multiple frames in sequence", %{url: url} do
+      {:ok, pid} = Client.start_link(%{test_pid: self()}, url: url)
+      assert_receive :connected, 1000
+
+      :ok = Parley.send_frame_async(pid, {:text, "one"})
+      :ok = Parley.send_frame_async(pid, {:text, "two"})
+      :ok = Parley.send_frame_async(pid, {:text, "three"})
+
+      assert_receive {:frame, {:text, "one"}}, 1000
+      assert_receive {:frame, {:text, "two"}}, 1000
+      assert_receive {:frame, {:text, "three"}}, 1000
+
+      Parley.disconnect(pid)
+    end
+
+    test "postponed send_frame_async is dropped after connect timeout" do
+      {:ok, listen} = :gen_tcp.listen(0, [:binary, active: false, reuseaddr: true])
+      {:ok, port} = :inet.port(listen)
+
+      {:ok, pid} =
+        Client.start_link(%{test_pid: self()},
+          url: "ws://127.0.0.1:#{port}/ws",
+          connect_timeout: 200
+        )
+
+      # Cast while still in :connecting state — will be postponed
+      :ok = Parley.send_frame_async(pid, {:text, "hello"})
+
+      # Eventually times out and transitions to disconnected
+      # The postponed cast should be silently dropped in disconnected state
+      assert_receive {:disconnected, :connect_timeout}, 1000
+
+      Parley.disconnect(pid)
+      :gen_tcp.close(listen)
+    end
+  end
+
   describe "disconnecting" do
     test "graceful disconnect invokes handle_disconnect", %{url: url} do
       {:ok, pid} = Client.start_link(%{test_pid: self()}, url: url)
