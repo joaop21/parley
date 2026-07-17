@@ -24,6 +24,7 @@ Parley provides a callback-based API (`use Parley`) backed by a `gen_statem` sta
 - `Parley` (`lib/parley.ex`) — Behaviour definition with callbacks + `__using__` macro
 - `Parley.Connection` (`lib/parley/connection.ex`) — `gen_statem` implementation with state machine: `disconnected → connecting → connected`
 - `Parley.Application` (`lib/parley/application.ex`) — OTP Application supervisor
+- `Parley.Telemetry` (`lib/parley/telemetry.ex`) — `:telemetry` event reference and emit functions
 
 ### Callbacks
 
