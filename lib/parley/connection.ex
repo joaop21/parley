@@ -150,7 +150,9 @@ defmodule Parley.Connection do
 
   # Leftover transport frames (e.g. a server close frame still in the mailbox
   # after we transitioned to :disconnected) must be consumed here, not leaked to
-  # the client's handle_info/2 as raw wire bytes.
+  # the client's handle_info/2 as raw wire bytes. Only :disconnected drops them:
+  # in :connecting/:connected they belong to the live conn and are consumed by
+  # Mint.WebSocket.stream/2, but here conn is nil so nothing else would.
   def disconnected(:info, {:tcp, _socket, _bytes}, _data), do: :keep_state_and_data
   def disconnected(:info, {:tcp_closed, _socket}, _data), do: :keep_state_and_data
   def disconnected(:info, {:tcp_error, _socket, _reason}, _data), do: :keep_state_and_data
