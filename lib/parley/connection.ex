@@ -34,6 +34,12 @@ defmodule Parley.Connection do
 
   @impl true
   def init({module, {url, user_state, opts}}) do
+    # Trap exits so a linked process (e.g. a supervisor sending :shutdown, or a
+    # user-linked worker) is delivered as a message we can react to, rather than
+    # taking the process down with no chance to clean up. The intercept clauses
+    # in each state preserve the untrapped behaviour for non-parent EXITs.
+    Process.flag(:trap_exit, true)
+
     case module.init(user_state) do
       {:ok, user_state} ->
         uri = URI.parse(url)
@@ -137,6 +143,19 @@ defmodule Parley.Connection do
     end
   end
 
+  # An untrapped process ignores a linked process exiting :normal, so we must
+  # too now that we trap exits. is_pid guards so a port EXIT (we own the
+  # transport) is not swallowed here and instead falls through to handle_info.
+  def disconnected(:info, {:EXIT, pid, :normal}, _data) when is_pid(pid) do
+    :keep_state_and_data
+  end
+
+  # An untrapped process dies when a linked process exits abnormally; propagate
+  # the same reason to preserve that behaviour.
+  def disconnected(:info, {:EXIT, pid, reason}, data) when is_pid(pid) do
+    {:stop, reason, data}
+  end
+
   def disconnected(:info, message, data) do
     case data.module.handle_info(message, data.user_state) do
       {:ok, user_state} ->
@@ -175,6 +194,19 @@ defmodule Parley.Connection do
 
   def connecting(:state_timeout, :connect_timeout, data) do
     {:next_state, :disconnected, %{data | disconnect_reason: :connect_timeout}}
+  end
+
+  # An untrapped process ignores a linked process exiting :normal, so we must
+  # too now that we trap exits. is_pid guards so a port EXIT (we own the
+  # transport) is not swallowed here and instead falls through to the stream.
+  def connecting(:info, {:EXIT, pid, :normal}, _data) when is_pid(pid) do
+    :keep_state_and_data
+  end
+
+  # An untrapped process dies when a linked process exits abnormally; propagate
+  # the same reason to preserve that behaviour.
+  def connecting(:info, {:EXIT, pid, reason}, data) when is_pid(pid) do
+    {:stop, reason, data}
   end
 
   def connecting(:info, message, data) do
@@ -262,6 +294,19 @@ defmodule Parley.Connection do
 
   def connected(:internal, :send_failed, data) do
     {:next_state, :disconnected, data}
+  end
+
+  # An untrapped process ignores a linked process exiting :normal, so we must
+  # too now that we trap exits. is_pid guards so a port EXIT (we own the
+  # transport) is not swallowed here and instead falls through to the stream.
+  def connected(:info, {:EXIT, pid, :normal}, _data) when is_pid(pid) do
+    :keep_state_and_data
+  end
+
+  # An untrapped process dies when a linked process exits abnormally; propagate
+  # the same reason to preserve that behaviour.
+  def connected(:info, {:EXIT, pid, reason}, data) when is_pid(pid) do
+    {:stop, reason, data}
   end
 
   def connected(:info, message, data) do

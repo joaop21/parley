@@ -984,4 +984,96 @@ defmodule ParleyTest do
       end
     end
   end
+
+  describe "linked process exits" do
+    defmodule LinkedExitClient do
+      @moduledoc false
+      use Parley
+
+      @impl true
+      def handle_connect(%{test_pid: pid} = state) do
+        send(pid, :connected)
+        {:ok, state}
+      end
+
+      @impl true
+      def handle_frame(frame, %{test_pid: pid} = state) do
+        send(pid, {:frame, frame})
+        {:ok, state}
+      end
+
+      # Spawns a process linked to the connection process (self/0 here is the
+      # connection) that exits with the given reason once told to :go.
+      @impl true
+      def handle_info({:spawn_link, exit_reason}, %{test_pid: pid} = state) do
+        child =
+          spawn_link(fn ->
+            receive do
+              :go -> exit(exit_reason)
+            end
+          end)
+
+        send(pid, {:linked, child})
+        {:ok, state}
+      end
+
+      # The EXIT intercept clauses must swallow linked-process EXITs before they
+      # reach here; anything that lands in handle_info is a leak we report so the
+      # test can catch it.
+      def handle_info(message, %{test_pid: pid} = state) do
+        send(pid, {:unexpected_info, message})
+        {:ok, state}
+      end
+
+      @impl true
+      def handle_disconnect(reason, %{test_pid: pid} = state) do
+        send(pid, {:disconnected, reason})
+        {:ok, state}
+      end
+    end
+
+    test "a linked process exiting :normal does not kill the connection", %{url: url} do
+      Process.flag(:trap_exit, true)
+
+      {:ok, conn} = Parley.start_link(LinkedExitClient, %{test_pid: self()}, url: url)
+      assert_receive :connected, 1000
+
+      send(conn, {:spawn_link, :normal})
+      assert_receive {:linked, child}, 1000
+
+      send(child, :go)
+
+      # The connection must survive the linked :normal exit. Prove liveness with
+      # a synchronous round-trip through the echo server; the call would fail if
+      # the process had died.
+      :ok = Parley.send_frame(conn, {:text, "still alive"})
+      assert_receive {:frame, {:text, "still alive"}}, 1000
+
+      # The EXIT must have been intercepted, not surfaced to handle_info/2, and
+      # must not have taken the connection down.
+      refute_received {:unexpected_info, {:EXIT, ^child, :normal}}
+      refute_received {:EXIT, ^conn, _reason}
+      assert Process.alive?(conn)
+
+      Parley.disconnect(conn)
+    end
+
+    test "a linked process exiting abnormally kills the connection with that reason",
+         %{url: url} do
+      Process.flag(:trap_exit, true)
+
+      {:ok, conn} = Parley.start_link(LinkedExitClient, %{test_pid: self()}, url: url)
+      assert_receive :connected, 1000
+
+      send(conn, {:spawn_link, :boom})
+      assert_receive {:linked, child}, 1000
+
+      send(child, :go)
+
+      # An untrapped process would die with the linked process's exit reason;
+      # the connection must go down with the same reason.
+      assert_receive {:EXIT, ^conn, :boom}, 1000
+      refute Process.alive?(conn)
+    end
+  end
 end
