@@ -34,6 +34,13 @@ defmodule Parley.Connection do
 
   @impl true
   def init({module, {url, user_state, opts}}) do
+    # Trap exits so that on shutdown gen_statem terminates cleanly (running
+    # terminate/3) instead of being killed by the signal. gen_statem consumes
+    # the *parent's* EXIT in its own loop; the intercept clauses in each state
+    # handle only *non-parent* EXITs (a linked worker, the transport port),
+    # preserving the untrapped behaviour for those.
+    Process.flag(:trap_exit, true)
+
     case module.init(user_state) do
       {:ok, user_state} ->
         uri = URI.parse(url)
@@ -137,6 +144,10 @@ defmodule Parley.Connection do
     end
   end
 
+  def disconnected(:info, {:EXIT, _from, reason}, data) do
+    handle_linked_exit(reason, data)
+  end
+
   def disconnected(:info, message, data) do
     case data.module.handle_info(message, data.user_state) do
       {:ok, user_state} ->
@@ -175,6 +186,10 @@ defmodule Parley.Connection do
 
   def connecting(:state_timeout, :connect_timeout, data) do
     {:next_state, :disconnected, %{data | disconnect_reason: :connect_timeout}}
+  end
+
+  def connecting(:info, {:EXIT, _from, reason}, data) do
+    handle_linked_exit(reason, data)
   end
 
   def connecting(:info, message, data) do
@@ -262,6 +277,10 @@ defmodule Parley.Connection do
 
   def connected(:internal, :send_failed, data) do
     {:next_state, :disconnected, data}
+  end
+
+  def connected(:info, {:EXIT, _from, reason}, data) do
+    handle_linked_exit(reason, data)
   end
 
   def connected(:info, message, data) do
@@ -557,6 +576,16 @@ defmodule Parley.Connection do
     if data.conn, do: Mint.HTTP.close(data.conn)
     {:stop, reason, %{data | user_state: user_state, conn: nil}}
   end
+
+  # We trap exits (see init/1), so we replicate OTP's default behaviour for a
+  # linked process' EXIT: ignore a :normal exit, die with the reason on an
+  # abnormal one. There is deliberately no is_pid guard — the transport socket is
+  # a linked *port*, not a pid, so an abnormal port death must stop us exactly as
+  # it did before we trapped exits (an unguarded port EXIT would otherwise fall
+  # through to stream/handle_info and leave us alive in a broken state). Every
+  # state's non-parent {:EXIT, _, _} clause delegates here.
+  defp handle_linked_exit(:normal, _data), do: :keep_state_and_data
+  defp handle_linked_exit(reason, data), do: {:stop, reason, data}
 
   defp send_frame_internal(data, frame) do
     case Mint.WebSocket.encode(data.websocket, frame) do
