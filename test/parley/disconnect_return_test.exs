@@ -290,6 +290,8 @@ defmodule Parley.DisconnectReturnTest do
           {:ok, state}
         end
 
+        def handle_info(_message, state), do: {:ok, state}
+
         @impl true
         def handle_disconnect(reason, %{test_pid: pid} = state) do
           send(pid, {:disconnected, reason, state})
@@ -312,6 +314,51 @@ defmodule Parley.DisconnectReturnTest do
       assert_receive {:disconnected, :done, %{disconnected_by_frame: true}}, 1000
 
       assert Process.alive?(pid)
+      Parley.disconnect(pid)
+    end
+  end
+
+  describe "leftover transport messages in :disconnected state" do
+    test "stray transport frame is dropped and never reaches handle_info/2", %{url: url} do
+      defmodule TransportLeakClient do
+        use Parley
+
+        @impl true
+        def handle_connect(%{test_pid: pid} = state) do
+          send(pid, :connected)
+          {:ok, state}
+        end
+
+        @impl true
+        def handle_disconnect(reason, %{test_pid: pid} = state) do
+          send(pid, {:disconnected, reason})
+          {:ok, state}
+        end
+
+        @impl true
+        def handle_info(message, %{test_pid: pid} = state) do
+          send(pid, {:client_info, message})
+          {:ok, state}
+        end
+      end
+
+      {:ok, pid} =
+        Parley.start_link(TransportLeakClient, %{test_pid: self()}, url: url)
+
+      assert_receive :connected, 1000
+
+      # Park the connection in :disconnected (default reconnect: false).
+      :ok = Parley.disconnect(pid)
+      assert_receive {:disconnected, :closed}, 1000
+
+      # Simulate a server close frame still sitting in the mailbox that arrives
+      # after the transition to :disconnected.
+      send(pid, {:tcp, :fake_socket, <<136, 2, 3, 232>>})
+
+      # The library must consume it; the client callback must never see it.
+      refute_receive {:client_info, {:tcp, _, _}}, 200
+      assert Process.alive?(pid)
+
       Parley.disconnect(pid)
     end
   end

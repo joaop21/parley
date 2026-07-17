@@ -148,6 +148,18 @@ defmodule Parley.Connection do
     handle_linked_exit(reason, data)
   end
 
+  # Leftover transport frames (e.g. a server close frame still in the mailbox
+  # after we transitioned to :disconnected) must be consumed here, not leaked to
+  # the client's handle_info/2 as raw wire bytes. Only :disconnected drops them:
+  # in :connecting/:connected they belong to the live conn and are consumed by
+  # Mint.WebSocket.stream/2, but here conn is nil so nothing else would.
+  def disconnected(:info, {:tcp, _socket, _bytes}, _data), do: :keep_state_and_data
+  def disconnected(:info, {:tcp_closed, _socket}, _data), do: :keep_state_and_data
+  def disconnected(:info, {:tcp_error, _socket, _reason}, _data), do: :keep_state_and_data
+  def disconnected(:info, {:ssl, _socket, _bytes}, _data), do: :keep_state_and_data
+  def disconnected(:info, {:ssl_closed, _socket}, _data), do: :keep_state_and_data
+  def disconnected(:info, {:ssl_error, _socket, _reason}, _data), do: :keep_state_and_data
+
   def disconnected(:info, message, data) do
     case data.module.handle_info(message, data.user_state) do
       {:ok, user_state} ->
