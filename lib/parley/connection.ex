@@ -144,20 +144,8 @@ defmodule Parley.Connection do
     end
   end
 
-  # We trap exits (see init/1), so we must replicate the default OTP behaviour
-  # for a linked process' EXIT ourselves: ignore a :normal exit, die with the
-  # reason on an abnormal one. There is deliberately no is_pid guard: the
-  # transport socket is a linked *port*, not a pid, so matching its EXIT here is
-  # what makes an abnormal transport death stop us exactly as it did before we
-  # trapped exits (an unguarded port EXIT would otherwise fall through to the
-  # stream/handle_info and leave us alive in a broken state). These same clauses
-  # appear in connecting/connected; this note is the shared explanation.
-  def disconnected(:info, {:EXIT, _from, :normal}, _data) do
-    :keep_state_and_data
-  end
-
   def disconnected(:info, {:EXIT, _from, reason}, data) do
-    {:stop, reason, data}
+    handle_linked_exit(reason, data)
   end
 
   def disconnected(:info, message, data) do
@@ -200,13 +188,8 @@ defmodule Parley.Connection do
     {:next_state, :disconnected, %{data | disconnect_reason: :connect_timeout}}
   end
 
-  # EXIT interception (see the note on disconnected/3 for why there is no guard).
-  def connecting(:info, {:EXIT, _from, :normal}, _data) do
-    :keep_state_and_data
-  end
-
   def connecting(:info, {:EXIT, _from, reason}, data) do
-    {:stop, reason, data}
+    handle_linked_exit(reason, data)
   end
 
   def connecting(:info, message, data) do
@@ -296,13 +279,8 @@ defmodule Parley.Connection do
     {:next_state, :disconnected, data}
   end
 
-  # EXIT interception (see the note on disconnected/3 for why there is no guard).
-  def connected(:info, {:EXIT, _from, :normal}, _data) do
-    :keep_state_and_data
-  end
-
   def connected(:info, {:EXIT, _from, reason}, data) do
-    {:stop, reason, data}
+    handle_linked_exit(reason, data)
   end
 
   def connected(:info, message, data) do
@@ -598,6 +576,16 @@ defmodule Parley.Connection do
     if data.conn, do: Mint.HTTP.close(data.conn)
     {:stop, reason, %{data | user_state: user_state, conn: nil}}
   end
+
+  # We trap exits (see init/1), so we replicate OTP's default behaviour for a
+  # linked process' EXIT: ignore a :normal exit, die with the reason on an
+  # abnormal one. There is deliberately no is_pid guard — the transport socket is
+  # a linked *port*, not a pid, so an abnormal port death must stop us exactly as
+  # it did before we trapped exits (an unguarded port EXIT would otherwise fall
+  # through to stream/handle_info and leave us alive in a broken state). Every
+  # state's non-parent {:EXIT, _, _} clause delegates here.
+  defp handle_linked_exit(:normal, _data), do: :keep_state_and_data
+  defp handle_linked_exit(reason, data), do: {:stop, reason, data}
 
   defp send_frame_internal(data, frame) do
     case Mint.WebSocket.encode(data.websocket, frame) do
