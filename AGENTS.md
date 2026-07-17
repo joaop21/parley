@@ -72,5 +72,5 @@ Test support modules are compiled via `elixirc_paths(:test)` in `mix.exs`.
 
 - Elixir 1.19, OTP 28
 - Use `mix format` before committing
-- Tests are async (`use ExUnit.Case, async: true`)
+- Tests are async (`use ExUnit.Case, async: true`), except telemetry tests, which run `async: false` — `:telemetry` handlers live in a global registry, so a concurrent test's events would satisfy another test's `assert_receive`
 - Follow existing patterns: callbacks return `{:ok, state}`, public API goes through `Parley.Connection`

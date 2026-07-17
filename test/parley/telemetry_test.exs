@@ -35,7 +35,7 @@ defmodule Parley.TelemetryTest do
     assert metadata.type == :text
     assert metadata.pid == pid
     assert metadata.module == Client
-    assert %URI{} = metadata.uri
+    assert metadata.uri == URI.parse(url)
 
     Parley.disconnect(pid)
   end
@@ -55,7 +55,7 @@ defmodule Parley.TelemetryTest do
     assert metadata.type == :binary
     assert metadata.pid == pid
     assert metadata.module == Client
-    assert %URI{} = metadata.uri
+    assert metadata.uri == URI.parse(url)
 
     Parley.disconnect(pid)
   end
@@ -66,8 +66,9 @@ defmodule Parley.TelemetryTest do
     {:ok, pid} = Client.start_link(%{test_pid: self()}, url: url)
     assert_receive :connected, 1000
 
-    # Ask the echo server to send us a ping carrying a 3-byte payload. The ping
-    # is emitted from a distinct process_frames/2 clause than text/binary.
+    # Ask the echo server to send us a ping carrying a 3-byte payload. Ping is
+    # dispatched from a distinct dispatch_frame/2 clause (send_pong + handle_ping)
+    # than text/binary, so it exercises a separate path to the shared emit site.
     :ok = Parley.send_frame(pid, {:text, "send_ping:abc"})
 
     assert_receive {[:parley, :frame, :received], ^ref, measurements, metadata}, 1000
@@ -77,7 +78,7 @@ defmodule Parley.TelemetryTest do
     assert metadata.type == :ping
     assert metadata.pid == pid
     assert metadata.module == Client
-    assert %URI{} = metadata.uri
+    assert metadata.uri == URI.parse(url)
 
     Parley.disconnect(pid)
   end
