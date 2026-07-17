@@ -330,9 +330,6 @@ defmodule Parley.DisconnectReturnTest do
         end
 
         @impl true
-        def handle_frame(_frame, state), do: {:ok, state}
-
-        @impl true
         def handle_disconnect(reason, %{test_pid: pid} = state) do
           send(pid, {:disconnected, reason})
           {:ok, state}

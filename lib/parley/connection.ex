@@ -151,12 +151,12 @@ defmodule Parley.Connection do
   # Leftover transport frames (e.g. a server close frame still in the mailbox
   # after we transitioned to :disconnected) must be consumed here, not leaked to
   # the client's handle_info/2 as raw wire bytes.
-  def disconnected(:info, {:tcp, _socket, _data}, _state), do: :keep_state_and_data
-  def disconnected(:info, {:tcp_closed, _socket}, _state), do: :keep_state_and_data
-  def disconnected(:info, {:tcp_error, _socket, _reason}, _state), do: :keep_state_and_data
-  def disconnected(:info, {:ssl, _socket, _data}, _state), do: :keep_state_and_data
-  def disconnected(:info, {:ssl_closed, _socket}, _state), do: :keep_state_and_data
-  def disconnected(:info, {:ssl_error, _socket, _reason}, _state), do: :keep_state_and_data
+  def disconnected(:info, {:tcp, _socket, _bytes}, _data), do: :keep_state_and_data
+  def disconnected(:info, {:tcp_closed, _socket}, _data), do: :keep_state_and_data
+  def disconnected(:info, {:tcp_error, _socket, _reason}, _data), do: :keep_state_and_data
+  def disconnected(:info, {:ssl, _socket, _bytes}, _data), do: :keep_state_and_data
+  def disconnected(:info, {:ssl_closed, _socket}, _data), do: :keep_state_and_data
+  def disconnected(:info, {:ssl_error, _socket, _reason}, _data), do: :keep_state_and_data
 
   def disconnected(:info, message, data) do
     case data.module.handle_info(message, data.user_state) do
