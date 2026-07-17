@@ -488,11 +488,13 @@ defmodule Parley.Connection do
         data = send_close(data)
         {:halt, {:close, code, reason, data}}
 
-      {:ping, payload}, {:ok, data} ->
+      {:ping, payload} = frame, {:ok, data} ->
+        Parley.Telemetry.frame_received(frame, data.module, data.uri)
         data = send_pong(data, payload)
         handle_frame_result(data.module.handle_ping(payload, data.user_state), data)
 
       frame, {:ok, data} ->
+        Parley.Telemetry.frame_received(frame, data.module, data.uri)
         handle_frame_result(data.module.handle_frame(frame, data.user_state), data)
     end)
   end
