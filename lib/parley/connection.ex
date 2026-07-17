@@ -34,10 +34,11 @@ defmodule Parley.Connection do
 
   @impl true
   def init({module, {url, user_state, opts}}) do
-    # Trap exits so a linked process (e.g. a supervisor sending :shutdown, or a
-    # user-linked worker) is delivered as a message we can react to, rather than
-    # taking the process down with no chance to clean up. The intercept clauses
-    # in each state preserve the untrapped behaviour for non-parent EXITs.
+    # Trap exits so that on shutdown gen_statem terminates cleanly (running
+    # terminate/3) instead of being killed by the signal. gen_statem consumes
+    # the *parent's* EXIT in its own loop; the intercept clauses in each state
+    # handle only *non-parent* EXITs (a linked worker, the transport port),
+    # preserving the untrapped behaviour for those.
     Process.flag(:trap_exit, true)
 
     case module.init(user_state) do
