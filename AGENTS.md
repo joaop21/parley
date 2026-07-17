@@ -24,6 +24,7 @@ Parley provides a callback-based API (`use Parley`) backed by a `gen_statem` sta
 - `Parley` (`lib/parley.ex`) — Behaviour definition with callbacks + `__using__` macro
 - `Parley.Connection` (`lib/parley/connection.ex`) — `gen_statem` implementation with state machine: `disconnected → connecting → connected`
 - `Parley.Application` (`lib/parley/application.ex`) — OTP Application supervisor
+- `Parley.Telemetry` (`lib/parley/telemetry.ex`) — `:telemetry` event reference and emit functions
 
 ### Callbacks
 
@@ -71,5 +72,5 @@ Test support modules are compiled via `elixirc_paths(:test)` in `mix.exs`.
 
 - Elixir 1.19, OTP 28
 - Use `mix format` before committing
-- Tests are async (`use ExUnit.Case, async: true`)
+- Tests are async (`use ExUnit.Case, async: true`), except telemetry tests, which run `async: false` — `:telemetry` handlers live in a global registry, so a concurrent test's events would satisfy another test's `assert_receive`
 - Follow existing patterns: callbacks return `{:ok, state}`, public API goes through `Parley.Connection`

@@ -515,17 +515,25 @@ defmodule Parley.Connection do
 
   defp process_frames(data, frames) do
     Enum.reduce_while(frames, {:ok, data}, fn
+      # Close frames are lifecycle, not data: they must not emit frame:received,
+      # so they are handled here before the single emit site below.
       {:close, code, reason}, {:ok, data} ->
         data = send_close(data)
         {:halt, {:close, code, reason, data}}
 
-      {:ping, payload}, {:ok, data} ->
-        data = send_pong(data, payload)
-        handle_frame_result(data.module.handle_ping(payload, data.user_state), data)
-
       frame, {:ok, data} ->
-        handle_frame_result(data.module.handle_frame(frame, data.user_state), data)
+        Parley.Telemetry.frame_received(frame, data.module, data.uri)
+        dispatch_frame(frame, data)
     end)
+  end
+
+  defp dispatch_frame({:ping, payload}, data) do
+    data = send_pong(data, payload)
+    handle_frame_result(data.module.handle_ping(payload, data.user_state), data)
+  end
+
+  defp dispatch_frame(frame, data) do
+    handle_frame_result(data.module.handle_frame(frame, data.user_state), data)
   end
 
   defp handle_frame_result({:ok, user_state}, data) do

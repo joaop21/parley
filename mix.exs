@@ -614,6 +614,7 @@ defmodule Parley.MixProject do
     [
       {:mint_web_socket, "~> 1.0"},
       {:castore, "~> 1.0"},
+      {:telemetry, "~> 1.0"},
       {:bandit, "~> 1.0", only: :test},
       {:websock_adapter, "~> 0.5", only: :test},
       {:ex_doc, "~> 0.35", only: :dev, runtime: false},
