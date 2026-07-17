@@ -143,16 +143,19 @@ defmodule Parley.Connection do
     end
   end
 
-  # An untrapped process ignores a linked process exiting :normal, so we must
-  # too now that we trap exits. is_pid guards so a port EXIT (we own the
-  # transport) is not swallowed here and instead falls through to handle_info.
-  def disconnected(:info, {:EXIT, pid, :normal}, _data) when is_pid(pid) do
+  # We trap exits (see init/1), so we must replicate the default OTP behaviour
+  # for a linked process' EXIT ourselves: ignore a :normal exit, die with the
+  # reason on an abnormal one. There is deliberately no is_pid guard: the
+  # transport socket is a linked *port*, not a pid, so matching its EXIT here is
+  # what makes an abnormal transport death stop us exactly as it did before we
+  # trapped exits (an unguarded port EXIT would otherwise fall through to the
+  # stream/handle_info and leave us alive in a broken state). These same clauses
+  # appear in connecting/connected; this note is the shared explanation.
+  def disconnected(:info, {:EXIT, _from, :normal}, _data) do
     :keep_state_and_data
   end
 
-  # An untrapped process dies when a linked process exits abnormally; propagate
-  # the same reason to preserve that behaviour.
-  def disconnected(:info, {:EXIT, pid, reason}, data) when is_pid(pid) do
+  def disconnected(:info, {:EXIT, _from, reason}, data) do
     {:stop, reason, data}
   end
 
@@ -196,16 +199,12 @@ defmodule Parley.Connection do
     {:next_state, :disconnected, %{data | disconnect_reason: :connect_timeout}}
   end
 
-  # An untrapped process ignores a linked process exiting :normal, so we must
-  # too now that we trap exits. is_pid guards so a port EXIT (we own the
-  # transport) is not swallowed here and instead falls through to the stream.
-  def connecting(:info, {:EXIT, pid, :normal}, _data) when is_pid(pid) do
+  # EXIT interception (see the note on disconnected/3 for why there is no guard).
+  def connecting(:info, {:EXIT, _from, :normal}, _data) do
     :keep_state_and_data
   end
 
-  # An untrapped process dies when a linked process exits abnormally; propagate
-  # the same reason to preserve that behaviour.
-  def connecting(:info, {:EXIT, pid, reason}, data) when is_pid(pid) do
+  def connecting(:info, {:EXIT, _from, reason}, data) do
     {:stop, reason, data}
   end
 
@@ -296,16 +295,12 @@ defmodule Parley.Connection do
     {:next_state, :disconnected, data}
   end
 
-  # An untrapped process ignores a linked process exiting :normal, so we must
-  # too now that we trap exits. is_pid guards so a port EXIT (we own the
-  # transport) is not swallowed here and instead falls through to the stream.
-  def connected(:info, {:EXIT, pid, :normal}, _data) when is_pid(pid) do
+  # EXIT interception (see the note on disconnected/3 for why there is no guard).
+  def connected(:info, {:EXIT, _from, :normal}, _data) do
     :keep_state_and_data
   end
 
-  # An untrapped process dies when a linked process exits abnormally; propagate
-  # the same reason to preserve that behaviour.
-  def connected(:info, {:EXIT, pid, reason}, data) when is_pid(pid) do
+  def connected(:info, {:EXIT, _from, reason}, data) do
     {:stop, reason, data}
   end
 
