@@ -309,36 +309,30 @@ defmodule Parley.Connection do
   end
 
   def connected({:call, from}, {:send, frame}, data) do
-    case Mint.WebSocket.encode(data.websocket, frame) do
-      {:ok, websocket, encoded} ->
-        case Mint.WebSocket.stream_request_body(data.conn, data.request_ref, encoded) do
-          {:ok, conn} ->
-            {:keep_state, %{data | conn: conn, websocket: websocket}, [{:reply, from, :ok}]}
+    case send_frame_internal(data, frame) do
+      {:ok, data} ->
+        {:keep_state, data, [{:reply, from, :ok}]}
 
-          {:error, conn, reason} ->
-            {:next_state, :disconnected, %{data | conn: conn}, [{:reply, from, {:error, reason}}]}
-        end
+      {:error, :encode, data, reason} ->
+        {:keep_state, data, [{:reply, from, {:error, reason}}]}
 
-      {:error, websocket, reason} ->
-        {:keep_state, %{data | websocket: websocket}, [{:reply, from, {:error, reason}}]}
+      {:error, :send, data, reason} ->
+        {:next_state, :disconnected, %{data | disconnect_reason: {:error, reason}},
+         [{:reply, from, {:error, reason}}]}
     end
   end
 
   def connected(:cast, {:send, frame}, data) do
-    case Mint.WebSocket.encode(data.websocket, frame) do
-      {:ok, websocket, encoded} ->
-        case Mint.WebSocket.stream_request_body(data.conn, data.request_ref, encoded) do
-          {:ok, conn} ->
-            {:keep_state, %{data | conn: conn, websocket: websocket}}
+    case send_frame_internal(data, frame) do
+      {:ok, data} ->
+        {:keep_state, data}
 
-          {:error, conn, reason} ->
-            {:next_state, :disconnected,
-             %{data | conn: conn, disconnect_reason: {:error, reason}}}
-        end
-
-      {:error, websocket, reason} ->
+      {:error, :encode, data, reason} ->
         Logger.warning("Failed to encode async frame: #{inspect(reason)}")
-        {:keep_state, %{data | websocket: websocket}}
+        {:keep_state, data}
+
+      {:error, :send, data, reason} ->
+        {:next_state, :disconnected, %{data | disconnect_reason: {:error, reason}}}
     end
   end
 

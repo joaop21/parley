@@ -147,6 +147,31 @@ defmodule ParleyTest do
 
       assert :ok = Parley.disconnect(pid)
     end
+
+    test "synchronous send failure reports the transport error to handle_disconnect",
+         %{url: url} do
+      {:ok, pid} = Client.start_link(%{test_pid: self()}, url: url)
+      assert_receive :connected, 1000
+
+      # A synchronous stream_request_body failure is near-impossible to trigger
+      # through real I/O: TCP writes buffer, so a dead socket surfaces via the
+      # info path, not the send call. Inject a closed Mint connection so the next
+      # send fails synchronously at the transport, exercising the
+      # connected({:call, ...}, {:send, ...}) send-error branch. Regression test
+      # for #287, where that branch omitted disconnect_reason and handle_disconnect
+      # saw a stale reason instead of the real transport error.
+      {:connected, data} = :sys.get_state(pid)
+      {:ok, closed_conn} = Mint.HTTP.close(data.conn)
+      :sys.replace_state(pid, fn {_state, d} -> {:connected, %{d | conn: closed_conn}} end)
+
+      # The caller receives the real transport error synchronously...
+      assert {:error, %Mint.TransportError{reason: :closed}} =
+               Parley.send_frame(pid, {:text, "will fail"})
+
+      # ...and handle_disconnect sees that same reason, not a stale/default one.
+      assert_receive {:disconnected, {:error, %Mint.TransportError{reason: :closed}}}, 1000
+      assert Process.alive?(pid)
+    end
   end
 
   describe "connection errors" do
