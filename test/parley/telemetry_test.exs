@@ -98,4 +98,66 @@ defmodule Parley.TelemetryTest do
     assert_receive {:disconnected, {:remote_close, 1000, _}}, 1000
     refute_received {[:parley, :frame, :received], ^ref, _measurements, _metadata}
   end
+
+  test "emits [:parley, :reconnect, :scheduled] with post-increment attempts 1, 2, 3" do
+    # A failed connection with reconnect enabled will EXIT once retries are
+    # exhausted; trap it so the linked test process survives.
+    Process.flag(:trap_exit, true)
+
+    ref = :telemetry_test.attach_event_handlers(self(), [[:parley, :reconnect, :scheduled]])
+
+    # A refused port drives repeated connect failures; each one schedules a
+    # retry. base_delay is tiny so the three retries land quickly.
+    dead_url = "ws://127.0.0.1:1/ws"
+
+    {:ok, pid} =
+      Client.start_link(%{test_pid: self()},
+        url: dead_url,
+        reconnect: [base_delay: 20, max_delay: 100, max_retries: 3]
+      )
+
+    # :scheduled reports the POST-increment attempt, so consecutive events
+    # increase by 1 starting at 1 (not the pre-increment 0, 1, 2).
+    for expected_attempt <- 1..3 do
+      assert_receive {[:parley, :reconnect, :scheduled], ^ref, measurements, metadata}, 2000
+
+      assert metadata.attempt == expected_attempt
+      assert metadata.module == Client
+      assert metadata.uri == URI.parse(dead_url)
+      assert metadata.pid == pid
+
+      # delay is the backoff the retry was scheduled after — a positive integer.
+      assert is_integer(measurements.delay)
+      assert measurements.delay > 0
+    end
+  end
+
+  test "emits [:parley, :reconnect, :exhausted] at the ceiling with attempt == max_retries" do
+    Process.flag(:trap_exit, true)
+
+    ref = :telemetry_test.attach_event_handlers(self(), [[:parley, :reconnect, :exhausted]])
+
+    dead_url = "ws://127.0.0.1:1/ws"
+    max_retries = 3
+
+    {:ok, pid} =
+      Client.start_link(%{test_pid: self()},
+        url: dead_url,
+        reconnect: [base_delay: 20, max_delay: 100, max_retries: max_retries]
+      )
+
+    assert_receive {[:parley, :reconnect, :exhausted], ^ref, measurements, metadata}, 2000
+
+    # attempt is a MEASUREMENT here (metadata everywhere else) and equals
+    # exactly max_retries — the guard trips at equality.
+    assert measurements == %{attempt: max_retries}
+    assert metadata.module == Client
+    assert metadata.uri == URI.parse(dead_url)
+    assert metadata.pid == pid
+    refute Map.has_key?(metadata, :attempt)
+
+    # :exhausted is the only signal for permanently giving up; the process
+    # stops right after.
+    assert_receive {:EXIT, ^pid, {:error, :max_retries_exceeded}}, 2000
+  end
 end
