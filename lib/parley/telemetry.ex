@@ -193,13 +193,13 @@ defmodule Parley.Telemetry do
 
   ## Measurement units
 
-  | Measurement    | Unit             | Emitted on                                 |
-  | -------------- | ---------------- | ------------------------------------------ |
-  | `:size`        | bytes            | `:frame, :received` / `:frame, :sent`      |
-  | `:system_time` | native           | `:connect, :start` / `:connection, :start` |
-  | `:duration`    | native           | `:connect, :stop` / `:connection, :stop`   |
-  | `:delay`       | **milliseconds** | `:reconnect, :scheduled`                   |
-  | `:attempt`     | count            | `:reconnect, :exhausted`                   |
+  | Measurement    | Unit             | Emitted on                                                      |
+  | -------------- | ---------------- | --------------------------------------------------------------- |
+  | `:size`        | bytes            | `[:parley, :frame, :received]`, `[:parley, :frame, :sent]`      |
+  | `:system_time` | native           | `[:parley, :connect, :start]`, `[:parley, :connection, :start]` |
+  | `:duration`    | native           | `[:parley, :connect, :stop]`, `[:parley, :connection, :stop]`   |
+  | `:delay`       | **milliseconds** | `[:parley, :reconnect, :scheduled]`                             |
+  | `:attempt`     | count            | `[:parley, :reconnect, :exhausted]`                             |
 
   > #### `:delay` is milliseconds, not native {: .warning}
   >
@@ -237,11 +237,11 @@ defmodule Parley.Telemetry do
         [:parley, :reconnect, :exhausted]
       ]
 
-      :telemetry.attach_many("my-app-parley", events, &MyApp.Telemetry.handle/4, nil)
+      :telemetry.attach_many("myclient-parley", events, &MyClient.Telemetry.handle/4, nil)
 
   The handler must have a clause for **every** event it attaches:
 
-      defmodule MyApp.Telemetry do
+      defmodule MyClient.Telemetry do
         require Logger
 
         def handle([:parley, :frame, :received], %{size: size}, %{type: type}, _config),
@@ -273,13 +273,14 @@ defmodule Parley.Telemetry do
   >
   > `:telemetry` **detaches a handler that raises** — for *all* the events it
   > was attached to. A missing clause raises `FunctionClauseError` on the first
-  > matching emit, silently killing every metric above. Keep one clause per
-  > event, and avoid a catch-all that could raise on data you did not expect.
+  > matching emit, silently killing every metric above. Avoid a catch-all
+  > clause that could raise on data you did not expect.
 
   ## Metric tags
 
   Metadata drives correlation and tagging, but not every key is safe as a
-  `Telemetry.Metrics` tag — a high-cardinality tag explodes metric storage.
+  [`Telemetry.Metrics`](https://hexdocs.pm/telemetry_metrics) tag — a
+  high-cardinality tag explodes metric storage.
 
   | Metadata   | Safe to tag? | Why                                         |
   | ---------- | ------------ | ------------------------------------------- |
@@ -310,10 +311,9 @@ defmodule Parley.Telemetry do
 
   ## `Telemetry.Metrics`
 
-  A representative config for
-  [`Telemetry.Metrics`](https://hexdocs.pm/telemetry_metrics) — the `counter/2`
-  and `summary/2` helpers come from `import Telemetry.Metrics`, and mind the
-  units from the table above:
+  A representative `Telemetry.Metrics` config — the `counter/2` and `summary/2`
+  helpers come from `import Telemetry.Metrics`, and mind the units from the
+  table above:
 
       import Telemetry.Metrics
 
