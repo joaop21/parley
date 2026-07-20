@@ -147,6 +147,14 @@ defmodule Parley do
 
   <div id="parley-demo"></div>
 
+  ## Telemetry
+
+  Parley emits `:telemetry` events across the whole connection lifecycle —
+  frames received and sent, connect attempts, connection lifetime, and
+  reconnects. See `Parley.Telemetry` for the full event reference, a
+  ready-to-attach `:telemetry.attach_many/4` handler with a clause per event,
+  the measurement-unit table, and which metadata is safe to use as metric tags.
+
   ## Callbacks
 
   All callbacks are optional and have default implementations. Override only
