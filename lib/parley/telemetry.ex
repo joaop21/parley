@@ -52,6 +52,47 @@ defmodule Parley.Telemetry do
       * `:uri` — the `t:URI.t/0` the connection was opened against
       * `:pid` — the connection process that sent the frame
 
+  ### `[:parley, :connect, :start]`
+
+  Emitted when a connection attempt begins, immediately before the
+  synchronous connect runs. Together with `[:parley, :connect, :stop]` it
+  forms a span around every attempt, including reconnect retries.
+
+    * Measurements
+      * `:system_time` — `System.system_time/0` captured when the attempt
+        began
+
+    * Metadata
+      * `:module` — the module implementing the `Parley` callbacks
+      * `:uri` — the `t:URI.t/0` the connection was opened against
+      * `:pid` — the connection process
+      * `:attempt` — the zero-based attempt index: `0` for the initial
+        connect, `N` for the `N`th reconnect retry
+
+  ### `[:parley, :connect, :stop]`
+
+  Emitted when a connection attempt settles, closing the span opened by
+  `[:parley, :connect, :start]`. Every `:start` is paired with exactly one
+  `:stop`.
+
+    * Measurements
+      * `:duration` — native time units elapsed since the matching
+        `:start` (convert with `System.convert_time_unit/3`)
+
+    * Metadata
+      * `:module`, `:uri`, `:pid`, `:attempt` — as in `:start`; `:attempt`
+        matches the paired `:start`
+      * `:outcome` — one of:
+        * `:ok` — the WebSocket upgrade completed and the connection is
+          live
+        * `:error` — the attempt failed (refused, timed out, or the
+          upgrade was rejected); counts toward the connect failure rate
+        * `:aborted` — the attempt was cancelled or the process shut down
+          mid-connect; excluded from the failure rate
+      * `:reason` — `nil` when `outcome` is `:ok`; otherwise the failure
+        term (e.g. `:econnrefused`, `:connect_timeout`, `{:error, term}`,
+        `:closed`, `:shutdown`, or a crash reason)
+
   ## Example
 
       :telemetry.attach(
@@ -66,6 +107,8 @@ defmodule Parley.Telemetry do
 
   @frame_received [:parley, :frame, :received]
   @frame_sent [:parley, :frame, :sent]
+  @connect_start [:parley, :connect, :start]
+  @connect_stop [:parley, :connect, :stop]
 
   @doc false
   @spec frame_received(tuple(), module(), URI.t()) :: :ok
@@ -80,7 +123,6 @@ defmodule Parley.Telemetry do
 
   def frame_received(_frame, _module, _uri), do: :ok
 
-  @doc false
   @spec frame_sent(tuple(), module(), URI.t()) :: :ok
   def frame_sent({type, payload}, module, %URI{} = uri)
       when type in [:text, :binary, :ping, :pong] and is_binary(payload) do
@@ -92,4 +134,45 @@ defmodule Parley.Telemetry do
   end
 
   def frame_sent(_frame, _module, _uri), do: :ok
+
+  @doc false
+  @spec connect_start(module(), URI.t(), non_neg_integer()) :: :ok
+  def connect_start(module, %URI{} = uri, attempt)
+      when is_atom(module) and is_integer(attempt) and attempt >= 0 do
+    :telemetry.execute(
+      @connect_start,
+      %{system_time: System.system_time()},
+      %{module: module, uri: uri, pid: self(), attempt: attempt}
+    )
+  end
+
+  def connect_start(_module, _uri, _attempt), do: :ok
+
+  @doc false
+  @spec connect_stop(
+          module(),
+          URI.t(),
+          non_neg_integer(),
+          integer(),
+          :ok | :error | :aborted,
+          term()
+        ) :: :ok
+  def connect_stop(module, %URI{} = uri, attempt, duration, outcome, reason)
+      when is_atom(module) and is_integer(attempt) and attempt >= 0 and
+             is_integer(duration) and outcome in [:ok, :error, :aborted] do
+    :telemetry.execute(
+      @connect_stop,
+      %{duration: duration},
+      %{
+        module: module,
+        uri: uri,
+        pid: self(),
+        attempt: attempt,
+        outcome: outcome,
+        reason: reason
+      }
+    )
+  end
+
+  def connect_stop(_module, _uri, _attempt, _duration, _outcome, _reason), do: :ok
 end

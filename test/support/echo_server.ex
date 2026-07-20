@@ -112,4 +112,34 @@ defmodule Parley.Test.EchoServer do
     {:ok, {_ip, port}} = ThousandIsland.listener_info(server_pid)
     {port, server_pid}
   end
+
+  @doc """
+  Starts a raw TCP listener that accepts connections but never speaks HTTP.
+
+  The kernel completes the TCP handshake into the listen backlog, so a client
+  connects successfully but never receives a WebSocket upgrade response —
+  driving `connect_timeout`. A Bandit/Plug route can't reproduce this: Bandit
+  finishes the accept before the router runs. Mirrors `start/0`: binds port 0,
+  returns `{port, pid}`, and unlinks the owner so the caller's exit doesn't take
+  it down. Stop it with `Process.exit(pid, :kill)`.
+  """
+  def black_hole_listen do
+    test = self()
+
+    pid =
+      spawn_link(fn ->
+        {:ok, listen} = :gen_tcp.listen(0, [:binary, active: false, reuseaddr: true])
+        {:ok, port} = :inet.port(listen)
+        send(test, {self(), port})
+        # Hold the listen socket (and this process) open forever without ever
+        # accepting or responding.
+        Process.sleep(:infinity)
+      end)
+
+    receive do
+      {^pid, port} ->
+        Process.unlink(pid)
+        {port, pid}
+    end
+  end
 end
