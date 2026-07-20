@@ -678,6 +678,7 @@ defmodule Parley.Connection do
       {:ok, websocket, encoded} ->
         case Mint.WebSocket.stream_request_body(data.conn, data.request_ref, encoded) do
           {:ok, conn} ->
+            Parley.Telemetry.frame_sent(frame, data.module, data.uri)
             {:ok, %{data | conn: conn, websocket: websocket}}
 
           {:error, conn, reason} ->

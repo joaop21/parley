@@ -83,6 +83,79 @@ defmodule Parley.TelemetryTest do
     Parley.disconnect(pid)
   end
 
+  test "emits [:parley, :frame, :sent] for a text frame", %{url: url} do
+    ref = :telemetry_test.attach_event_handlers(self(), [[:parley, :frame, :sent]])
+
+    {:ok, pid} = Client.start_link(%{test_pid: self()}, url: url)
+    assert_receive :connected, 1000
+
+    :ok = Parley.send_frame(pid, {:text, "hello"})
+
+    assert_receive {[:parley, :frame, :sent], ^ref, measurements, metadata}, 1000
+
+    # "hello" is 5 bytes; assert the literal, not a recomputation.
+    assert measurements == %{size: 5}
+    assert metadata.type == :text
+    assert metadata.pid == pid
+    assert metadata.module == Client
+    assert metadata.uri == URI.parse(url)
+
+    Parley.disconnect(pid)
+  end
+
+  test "emits [:parley, :frame, :sent] for a binary frame", %{url: url} do
+    ref = :telemetry_test.attach_event_handlers(self(), [[:parley, :frame, :sent]])
+
+    {:ok, pid} = Client.start_link(%{test_pid: self()}, url: url)
+    assert_receive :connected, 1000
+
+    :ok = Parley.send_frame(pid, {:binary, <<1, 2, 3, 4>>})
+
+    assert_receive {[:parley, :frame, :sent], ^ref, measurements, metadata}, 1000
+
+    # <<1, 2, 3, 4>> is 4 bytes; assert the literal, not a recomputation.
+    assert measurements == %{size: 4}
+    assert metadata.type == :binary
+    assert metadata.pid == pid
+    assert metadata.module == Client
+    assert metadata.uri == URI.parse(url)
+
+    Parley.disconnect(pid)
+  end
+
+  test "an inbound ping emits frame:received :ping and the auto-pong emits frame:sent :pong",
+       %{url: url} do
+    ref =
+      :telemetry_test.attach_event_handlers(self(), [
+        [:parley, :frame, :received],
+        [:parley, :frame, :sent]
+      ])
+
+    {:ok, pid} = Client.start_link(%{test_pid: self()}, url: url)
+    assert_receive :connected, 1000
+
+    # Ask the echo server to push us a ping carrying a 3-byte payload. Parley
+    # auto-responds with a pong of the same payload from the shared send path.
+    :ok = Parley.send_frame(pid, {:text, "send_ping:abc"})
+
+    # The inbound ping is data-plane and emits frame:received.
+    assert_receive {[:parley, :frame, :received], ^ref, %{size: 3}, %{type: :ping}}, 1000
+
+    # The auto-pong is the send-side twin and emits frame:sent from
+    # send_frame_internal/2's success branch. "abc" is 3 bytes.
+    assert_receive {[:parley, :frame, :sent], ^ref, received_measurements, received_metadata}
+                   when received_metadata.type == :pong,
+                   1000
+
+    assert received_measurements == %{size: 3}
+    assert received_metadata.type == :pong
+    assert received_metadata.pid == pid
+    assert received_metadata.module == Client
+    assert received_metadata.uri == URI.parse(url)
+
+    Parley.disconnect(pid)
+  end
+
   test "does not emit [:parley, :frame, :received] for a close frame", %{url: url} do
     ref = :telemetry_test.attach_event_handlers(self(), [[:parley, :frame, :received]])
 
