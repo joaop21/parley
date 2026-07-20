@@ -107,6 +107,8 @@ defmodule Parley.Telemetry do
     )
   end
 
+  def connect_start(_module, _uri, _attempt), do: :ok
+
   @doc false
   @spec connect_stop(
           module(),
@@ -132,4 +134,6 @@ defmodule Parley.Telemetry do
       }
     )
   end
+
+  def connect_stop(_module, _uri, _attempt, _duration, _outcome, _reason), do: :ok
 end
