@@ -327,9 +327,7 @@ defmodule Parley.Connection do
             {:keep_state, data}
 
           {:error, :send, data, reason} ->
-            {:keep_state,
-             %{data | disconnect_reason: {:error, reason}, disconnect_outcome: :error},
-             [{:next_event, :internal, :send_failed}]}
+            {:keep_state, transport_error(data, reason), [{:next_event, :internal, :send_failed}]}
         end
 
       # Enter callbacks cannot perform state transitions or emit internal
@@ -364,8 +362,7 @@ defmodule Parley.Connection do
         handle_data_responses(%{data | conn: conn}, responses)
 
       {:error, conn, reason, _responses} ->
-        {:next_state, :disconnected,
-         %{data | conn: conn, disconnect_reason: {:error, reason}, disconnect_outcome: :error}}
+        {:next_state, :disconnected, %{transport_error(data, reason) | conn: conn}}
 
       :unknown ->
         handle_info_result(data.module.handle_info(message, data.user_state), data)
@@ -381,8 +378,7 @@ defmodule Parley.Connection do
         {:keep_state, data, [{:reply, from, {:error, reason}}]}
 
       {:error, :send, data, reason} ->
-        {:next_state, :disconnected,
-         %{data | disconnect_reason: {:error, reason}, disconnect_outcome: :error},
+        {:next_state, :disconnected, transport_error(data, reason),
          [{:reply, from, {:error, reason}}]}
     end
   end
@@ -397,8 +393,7 @@ defmodule Parley.Connection do
         {:keep_state, data}
 
       {:error, :send, data, reason} ->
-        {:next_state, :disconnected,
-         %{data | disconnect_reason: {:error, reason}, disconnect_outcome: :error}}
+        {:next_state, :disconnected, transport_error(data, reason)}
     end
   end
 
@@ -486,6 +481,14 @@ defmodule Parley.Connection do
     Parley.Telemetry.connection_stop(data.module, data.uri, duration, outcome, reason)
 
     %{data | connected_at: nil}
+  end
+
+  # Records a transport failure. disconnect_reason and disconnect_outcome must
+  # move together — a reason of {:error, _} always pairs with outcome :error —
+  # so setting both here keeps the two from drifting apart across the error
+  # sites, the way the reconnect resets clear them together.
+  defp transport_error(data, reason) do
+    %{data | disconnect_reason: {:error, reason}, disconnect_outcome: :error}
   end
 
   defp parse_reconnect(false), do: false
@@ -636,8 +639,7 @@ defmodule Parley.Connection do
              %{data | disconnect_reason: {:remote_close, code, reason}}}
 
           {:close_on_send_error, reason, data} ->
-            {:next_state, :disconnected,
-             %{data | disconnect_reason: {:error, reason}, disconnect_outcome: :error}}
+            {:next_state, :disconnected, transport_error(data, reason)}
 
           {:disconnect, reason, data} ->
             {:next_state, :disconnected, %{data | disconnect_reason: reason}}
@@ -648,13 +650,7 @@ defmodule Parley.Connection do
         end
 
       {:error, websocket, reason} ->
-        {:next_state, :disconnected,
-         %{
-           data
-           | websocket: websocket,
-             disconnect_reason: {:error, reason},
-             disconnect_outcome: :error
-         }}
+        {:next_state, :disconnected, %{transport_error(data, reason) | websocket: websocket}}
     end
   end
 
@@ -726,8 +722,7 @@ defmodule Parley.Connection do
         {:keep_state, data}
 
       {:error, :send, data, reason} ->
-        {:keep_state, %{data | disconnect_reason: {:error, reason}, disconnect_outcome: :error},
-         [{:next_event, :internal, :send_failed}]}
+        {:keep_state, transport_error(data, reason), [{:next_event, :internal, :send_failed}]}
     end
   end
 
