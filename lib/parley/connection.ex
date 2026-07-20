@@ -462,16 +462,25 @@ defmodule Parley.Connection do
       max_retries = Keyword.fetch!(reconnect_opts, :max_retries)
 
       if max_retries != :infinity and data.reconnect_attempt >= max_retries do
+        Parley.Telemetry.reconnect_exhausted(data)
         {:stop, {:error, :max_retries_exceeded}, data}
       else
         base_delay = Keyword.fetch!(reconnect_opts, :base_delay)
         max_delay = Keyword.fetch!(reconnect_opts, :max_delay)
+        # calculate_delay/3 gets the PRE-increment attempt so the first retry
+        # is base_delay * 2^0.
         delay = calculate_delay(base_delay, max_delay, data.reconnect_attempt)
 
         timer = Process.send_after(self(), :reconnect, delay)
 
-        {:keep_state,
-         %{data | reconnect_timer: timer, reconnect_attempt: data.reconnect_attempt + 1}}
+        # Increment BEFORE emitting so :scheduled reports the post-increment
+        # attempt (1 for the first retry), aligning it with the connect that
+        # follows. The :reconnect message sits in the mailbox until this
+        # function returns, so the timer cannot race the emit.
+        data = %{data | reconnect_timer: timer, reconnect_attempt: data.reconnect_attempt + 1}
+        Parley.Telemetry.reconnect_scheduled(data, delay)
+
+        {:keep_state, data}
       end
     else
       {:keep_state, data}
