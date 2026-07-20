@@ -309,6 +309,156 @@ defmodule Parley.TelemetryTest do
     end
   end
 
+  describe "connection span" do
+    test "emits :start and an :ok :stop on a remote close", %{url: url} do
+      ref =
+        :telemetry_test.attach_event_handlers(self(), [
+          [:parley, :connection, :start],
+          [:parley, :connection, :stop]
+        ])
+
+      {:ok, pid} = Client.start_link(%{test_pid: self()}, url: url)
+      assert_receive :connected, 1000
+
+      assert_receive {[:parley, :connection, :start], ^ref, start_measurements, start_metadata},
+                     1000
+
+      assert is_integer(start_measurements.system_time)
+      assert start_metadata.module == Client
+      assert start_metadata.uri == URI.parse(url)
+      assert start_metadata.pid == pid
+      # The connection span carries no :attempt — that is the connect span's.
+      refute Map.has_key?(start_metadata, :attempt)
+
+      # The echo server answers "close" with a close frame. Any close frame is
+      # :ok — Parley does not classify close codes; the peer spoke the protocol.
+      :ok = Parley.send_frame(pid, {:text, "close"})
+
+      assert_receive {[:parley, :connection, :stop], ^ref, stop_measurements, stop_metadata}, 1000
+      assert is_integer(stop_measurements.duration)
+      assert stop_metadata.module == Client
+      assert stop_metadata.uri == URI.parse(url)
+      assert stop_metadata.pid == pid
+      assert stop_metadata.outcome == :ok
+      assert stop_metadata.reason == {:remote_close, 1000, "normal closure"}
+    end
+
+    test "emits an :error :stop on a transport error", %{url: url} do
+      ref = :telemetry_test.attach_event_handlers(self(), [[:parley, :connection, :stop]])
+
+      {:ok, pid} = Client.start_link(%{test_pid: self()}, url: url)
+      assert_receive :connected, 1000
+
+      # "crash" kills the server-side socket, tearing the transport down under a
+      # live connection. The outcome is the explicit :error field, not inferred.
+      :ok = Parley.send_frame(pid, {:text, "crash"})
+
+      assert_receive {[:parley, :connection, :stop], ^ref, %{duration: _}, stop_metadata}, 1000
+      assert stop_metadata.outcome == :error
+      assert match?({:error, _}, stop_metadata.reason)
+      assert stop_metadata.module == Client
+      assert stop_metadata.uri == URI.parse(url)
+      assert stop_metadata.pid == pid
+    end
+
+    test "emits an :aborted :stop when shut down by a supervisor", %{url: url} do
+      ref = :telemetry_test.attach_event_handlers(self(), [[:parley, :connection, :stop]])
+
+      # A real supervisor drives terminate/3 via the parent EXIT — a different
+      # mechanism than :gen_statem.stop/1, which reaches terminate/3 through
+      # proc_lib's system message and would go green over a broken path.
+      {:ok, sup} =
+        Supervisor.start_link(
+          [{Client, {%{test_pid: self()}, [url: url]}}],
+          strategy: :one_for_one
+        )
+
+      assert_receive :connected, 1000
+
+      :ok = Supervisor.stop(sup)
+
+      assert_receive {[:parley, :connection, :stop], ^ref, %{duration: _}, %{outcome: :aborted}},
+                     1000
+    end
+
+    test "emits exactly one balanced :start/:stop when a callback returns {:stop, ...}", %{
+      url: url
+    } do
+      Process.flag(:trap_exit, true)
+
+      ref =
+        :telemetry_test.attach_event_handlers(self(), [
+          [:parley, :connection, :start],
+          [:parley, :connection, :stop]
+        ])
+
+      defmodule StopOnFrameClient do
+        use Parley
+
+        @impl true
+        def handle_connect(%{test_pid: pid} = state) do
+          send(pid, :connected)
+          {:ok, state}
+        end
+
+        @impl true
+        def handle_frame({:text, "stop"}, state), do: {:stop, :normal, state}
+        def handle_frame(_frame, state), do: {:ok, state}
+      end
+
+      {:ok, pid} = Parley.start_link(StopOnFrameClient, %{test_pid: self()}, url: url)
+      assert_receive :connected, 1000
+
+      assert_receive {[:parley, :connection, :start], ^ref, _measurements, _metadata}, 1000
+
+      # handle_frame's {:stop, ...} never transitions through :disconnected, so
+      # the disconnected(:enter) :stop site never runs. terminate/3 must emit the
+      # one balancing :stop against the still-open span.
+      :ok = Parley.send_frame(pid, {:text, "stop"})
+
+      assert_receive {[:parley, :connection, :stop], ^ref, %{duration: _}, %{outcome: :aborted}},
+                     1000
+
+      # Exactly one :stop for the one :start — no leaked or duplicated span.
+      refute_receive {[:parley, :connection, :stop], ^ref, _m, _meta}, 200
+      assert_receive {:EXIT, ^pid, :normal}, 1000
+    end
+
+    test "resets the outcome so a clean close after an error reconnect is :ok", %{url: url} do
+      ref =
+        :telemetry_test.attach_event_handlers(self(), [
+          [:parley, :connection, :start],
+          [:parley, :connection, :stop]
+        ])
+
+      {:ok, pid} =
+        Client.start_link(%{test_pid: self()},
+          url: url,
+          reconnect: [base_delay: 10, max_delay: 10]
+        )
+
+      assert_receive :connected, 1000
+      assert_receive {[:parley, :connection, :start], ^ref, _m1, _meta1}, 1000
+
+      # The first span dies from a transport error, carrying outcome: :error.
+      :ok = Parley.send_frame(pid, {:text, "crash"})
+      assert_receive {[:parley, :connection, :stop], ^ref, _m2, %{outcome: :error}}, 1000
+
+      # The reconnect opens a fresh span. Were disconnect_outcome not reset to
+      # :ok when the reconnect cleared disconnect_reason, the poisoned :error
+      # would leak into this second span.
+      assert_receive :connected, 2000
+      assert_receive {[:parley, :connection, :start], ^ref, _m3, _meta3}, 1000
+
+      # A clean remote close on the second span must report :ok — proving the
+      # reset happened, not a lingering field.
+      :ok = Parley.send_frame(pid, {:text, "close"})
+      assert_receive {[:parley, :connection, :stop], ^ref, _m4, %{outcome: :ok}}, 2000
+
+      Parley.disconnect(pid)
+    end
+  end
+
   test "emits [:parley, :reconnect, :scheduled] with post-increment attempts 1, 2, 3" do
     # A failed connection with reconnect enabled will EXIT once retries are
     # exhausted; trap it so the linked test process survives.
