@@ -20,6 +20,11 @@ defmodule Parley.Connection do
     # [:parley, :connect, :start] has fired without its matching :stop yet, so
     # it doubles as the open-span flag. Nulled the moment the span is closed.
     :connect_started_at,
+    # Monotonic time at which the connection went live (the :connected
+    # state-enter). Non-nil means a [:parley, :connection, :start] has fired
+    # without its matching :stop yet, so it doubles as the open-span flag for
+    # the connection lifetime span. Nulled the moment that span is closed.
+    :connected_at,
     connect_timeout: @default_connect_timeout,
     headers: [],
     transport_opts: [],
@@ -27,6 +32,13 @@ defmodule Parley.Connection do
     status: nil,
     resp_headers: [],
     disconnect_reason: :closed,
+    # Outcome carried into the connection span's :stop. It is an explicit field,
+    # never inferred from disconnect_reason (which cannot discriminate a real
+    # transport failure from a user-supplied {:error, term}). Defaults to :ok;
+    # set to :error at each transport-error site alongside disconnect_reason,
+    # and reset to :ok wherever disconnect_reason is reset so a past error can't
+    # poison the next connection's span. terminate/3 emits :aborted directly.
+    disconnect_outcome: :ok,
     reconnect: false,
     reconnect_attempt: 0
   ]
@@ -85,6 +97,12 @@ defmodule Parley.Connection do
     # no-ops for them.
     data = stop_connect_span(data, :aborted, data.disconnect_reason)
 
+    # Close the connection lifetime span here, before handle_disconnect/2 runs:
+    # a raise in the user callback would otherwise leak the span. The outcome is
+    # the explicit disconnect_outcome field, never inferred from the reason.
+    # Idempotent, so it no-ops on paths where no live connection was open.
+    data = stop_connection_span(data, data.disconnect_outcome, data.disconnect_reason)
+
     if data.conn, do: Mint.HTTP.close(data.conn)
 
     data = %{
@@ -98,13 +116,20 @@ defmodule Parley.Connection do
 
     case data.module.handle_disconnect(data.disconnect_reason, data.user_state) do
       {:reconnect, user_state} ->
-        maybe_reconnect(:reconnect, %{data | user_state: user_state, disconnect_reason: :closed})
+        maybe_reconnect(
+          :reconnect,
+          %{data | user_state: user_state, disconnect_reason: :closed, disconnect_outcome: :ok}
+        )
 
       {:disconnect, user_state} ->
-        {:keep_state, %{data | user_state: user_state, disconnect_reason: :closed}}
+        {:keep_state,
+         %{data | user_state: user_state, disconnect_reason: :closed, disconnect_outcome: :ok}}
 
       {:ok, user_state} ->
-        maybe_reconnect(:ok, %{data | user_state: user_state, disconnect_reason: :closed})
+        maybe_reconnect(
+          :ok,
+          %{data | user_state: user_state, disconnect_reason: :closed, disconnect_outcome: :ok}
+        )
     end
   end
 
@@ -143,13 +168,20 @@ defmodule Parley.Connection do
   def disconnected(:internal, :connect_failed, data) do
     case data.module.handle_disconnect(data.disconnect_reason, data.user_state) do
       {:reconnect, user_state} ->
-        maybe_reconnect(:reconnect, %{data | user_state: user_state, disconnect_reason: :closed})
+        maybe_reconnect(
+          :reconnect,
+          %{data | user_state: user_state, disconnect_reason: :closed, disconnect_outcome: :ok}
+        )
 
       {:disconnect, user_state} ->
-        {:keep_state, %{data | user_state: user_state, disconnect_reason: :closed}}
+        {:keep_state,
+         %{data | user_state: user_state, disconnect_reason: :closed, disconnect_outcome: :ok}}
 
       {:ok, user_state} ->
-        maybe_reconnect(:ok, %{data | user_state: user_state, disconnect_reason: :closed})
+        maybe_reconnect(
+          :ok,
+          %{data | user_state: user_state, disconnect_reason: :closed, disconnect_outcome: :ok}
+        )
     end
   end
 
@@ -273,6 +305,10 @@ defmodule Parley.Connection do
   ## :connected state
 
   def connected(:enter, :connecting, data) do
+    # The connection is now live: open the connection lifetime span before
+    # running handle_connect, so even an immediate {:stop, ...}/{:disconnect,
+    # ...} from that callback leaves a balancing :stop to fire.
+    data = start_connection_span(data)
     data = %{data | reconnect_attempt: 0, reconnect_timer: nil}
 
     case data.module.handle_connect(data.user_state) do
@@ -291,7 +327,8 @@ defmodule Parley.Connection do
             {:keep_state, data}
 
           {:error, :send, data, reason} ->
-            {:keep_state, %{data | disconnect_reason: {:error, reason}},
+            {:keep_state,
+             %{data | disconnect_reason: {:error, reason}, disconnect_outcome: :error},
              [{:next_event, :internal, :send_failed}]}
         end
 
@@ -327,7 +364,8 @@ defmodule Parley.Connection do
         handle_data_responses(%{data | conn: conn}, responses)
 
       {:error, conn, reason, _responses} ->
-        {:next_state, :disconnected, %{data | conn: conn, disconnect_reason: {:error, reason}}}
+        {:next_state, :disconnected,
+         %{data | conn: conn, disconnect_reason: {:error, reason}, disconnect_outcome: :error}}
 
       :unknown ->
         handle_info_result(data.module.handle_info(message, data.user_state), data)
@@ -343,7 +381,8 @@ defmodule Parley.Connection do
         {:keep_state, data, [{:reply, from, {:error, reason}}]}
 
       {:error, :send, data, reason} ->
-        {:next_state, :disconnected, %{data | disconnect_reason: {:error, reason}},
+        {:next_state, :disconnected,
+         %{data | disconnect_reason: {:error, reason}, disconnect_outcome: :error},
          [{:reply, from, {:error, reason}}]}
     end
   end
@@ -358,7 +397,8 @@ defmodule Parley.Connection do
         {:keep_state, data}
 
       {:error, :send, data, reason} ->
-        {:next_state, :disconnected, %{data | disconnect_reason: {:error, reason}}}
+        {:next_state, :disconnected,
+         %{data | disconnect_reason: {:error, reason}, disconnect_outcome: :error}}
     end
   end
 
@@ -381,13 +421,16 @@ defmodule Parley.Connection do
     end
   end
 
-  # Last-resort span close. Runs on every stop, including crashes and shutdowns
-  # (a {:stop, ...} from a state-enter clause hands us the *new* state, so we
-  # never match on state). Emits :aborted only when the span is still open; a
-  # normal close already nulled the flag, making this a no-op.
+  # Last-resort span close for both spans. Runs on every stop, including crashes
+  # and shutdowns (a {:stop, ...} from a state-enter clause hands us the *new*
+  # state, so we never match on state). Emits :aborted only when a span is still
+  # open; a normal close already nulled its flag, making that close a no-op. A
+  # supervisor shutdown or a callback {:stop, ...} that skips the :disconnected
+  # transition lands here with the connection span still open.
   @impl true
   def terminate(reason, _state, %__MODULE__{} = data) do
-    stop_connect_span(data, :aborted, reason)
+    data = stop_connect_span(data, :aborted, reason)
+    stop_connection_span(data, :aborted, reason)
     :ok
   end
 
@@ -422,6 +465,27 @@ defmodule Parley.Connection do
     )
 
     %{data | connect_started_at: nil}
+  end
+
+  # Opens the connection lifetime span: records the monotonic start time (also
+  # the open-span flag) before emitting, mirroring start_connect_span/1.
+  defp start_connection_span(data) do
+    data = %{data | connected_at: System.monotonic_time()}
+    Parley.Telemetry.connection_start(data.module, data.uri)
+    data
+  end
+
+  # Closes the connection lifetime span, nulling the flag. Idempotent like
+  # stop_connect_span/3: a nil flag means the span is already closed, so the
+  # explicit close site and terminate/3 collapse to a single :stop.
+  defp stop_connection_span(%__MODULE__{connected_at: nil} = data, _outcome, _reason), do: data
+
+  defp stop_connection_span(%__MODULE__{connected_at: started_at} = data, outcome, reason) do
+    duration = System.monotonic_time() - started_at
+
+    Parley.Telemetry.connection_stop(data.module, data.uri, duration, outcome, reason)
+
+    %{data | connected_at: nil}
   end
 
   defp parse_reconnect(false), do: false
@@ -572,7 +636,8 @@ defmodule Parley.Connection do
              %{data | disconnect_reason: {:remote_close, code, reason}}}
 
           {:close_on_send_error, reason, data} ->
-            {:next_state, :disconnected, %{data | disconnect_reason: {:error, reason}}}
+            {:next_state, :disconnected,
+             %{data | disconnect_reason: {:error, reason}, disconnect_outcome: :error}}
 
           {:disconnect, reason, data} ->
             {:next_state, :disconnected, %{data | disconnect_reason: reason}}
@@ -584,7 +649,12 @@ defmodule Parley.Connection do
 
       {:error, websocket, reason} ->
         {:next_state, :disconnected,
-         %{data | websocket: websocket, disconnect_reason: {:error, reason}}}
+         %{
+           data
+           | websocket: websocket,
+             disconnect_reason: {:error, reason},
+             disconnect_outcome: :error
+         }}
     end
   end
 
@@ -656,7 +726,7 @@ defmodule Parley.Connection do
         {:keep_state, data}
 
       {:error, :send, data, reason} ->
-        {:keep_state, %{data | disconnect_reason: {:error, reason}},
+        {:keep_state, %{data | disconnect_reason: {:error, reason}, disconnect_outcome: :error},
          [{:next_event, :internal, :send_failed}]}
     end
   end

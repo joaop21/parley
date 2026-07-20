@@ -93,6 +93,54 @@ defmodule Parley.Telemetry do
         term (e.g. `:econnrefused`, `:connect_timeout`, `{:error, term}`,
         `:closed`, `:shutdown`, or a crash reason)
 
+  ### `[:parley, :connection, :start]`
+
+  Emitted once the WebSocket upgrade has completed and the connection is
+  live, at the moment it enters the `:connected` state. Together with
+  `[:parley, :connection, :stop]` it forms a span around the whole
+  lifetime of a live connection. This is a different span from
+  `[:parley, :connect, :start]`, which measures a single dial attempt:
+  `:connect` spans one handshake, `:connection` spans everything from the
+  upgrade completing until the connection ends.
+
+    * Measurements
+      * `:system_time` — `System.system_time/0` captured when the
+        connection went live
+
+    * Metadata
+      * `:module` — the module implementing the `Parley` callbacks
+      * `:uri` — the `t:URI.t/0` the connection was opened against
+      * `:pid` — the connection process
+
+  ### `[:parley, :connection, :stop]`
+
+  Emitted when a live connection ends, closing the span opened by
+  `[:parley, :connection, :start]`. Every `:start` is paired with exactly
+  one `:stop`. The `:stop` fires before `c:Parley.handle_disconnect/2`
+  runs, so a raise in that callback cannot leak the span.
+
+    * Measurements
+      * `:duration` — native time units the connection stayed live,
+        elapsed since the matching `:start` (convert with
+        `System.convert_time_unit/3`)
+
+    * Metadata
+      * `:module`, `:uri`, `:pid` — as in `:start`
+      * `:outcome` — one of:
+        * `:ok` — the connection ended cleanly: a local or remote close,
+          or a client-requested disconnect. Any close frame is `:ok` —
+          Parley does not classify close codes, so a peer that sent one
+          spoke the protocol; a client that cares reads `:reason`
+        * `:error` — a transport failure tore the connection down (a lost
+          socket, a failed send, or a decode error)
+        * `:aborted` — the connection process shut down or crashed while
+          still live (e.g. a supervisor shutdown, or a callback returning
+          `{:stop, ...}`)
+      * `:reason` — the termination detail: `:closed`,
+        `{:remote_close, code, text}`, `{:error, term}`, or an exit
+        reason. `:connect_timeout` never appears here — it settles the
+        `:connect` span, before this span opens
+
   ### `[:parley, :reconnect, :scheduled]`
 
   Emitted when a reconnect attempt has been scheduled after a failed or
@@ -159,6 +207,8 @@ defmodule Parley.Telemetry do
   @frame_sent [:parley, :frame, :sent]
   @connect_start [:parley, :connect, :start]
   @connect_stop [:parley, :connect, :stop]
+  @connection_start [:parley, :connection, :start]
+  @connection_stop [:parley, :connection, :stop]
   @reconnect_scheduled [:parley, :reconnect, :scheduled]
   @reconnect_exhausted [:parley, :reconnect, :exhausted]
 
@@ -227,6 +277,31 @@ defmodule Parley.Telemetry do
   end
 
   def connect_stop(_module, _uri, _attempt, _duration, _outcome, _reason), do: :ok
+
+  @doc false
+  @spec connection_start(module(), URI.t()) :: :ok
+  def connection_start(module, %URI{} = uri) when is_atom(module) do
+    :telemetry.execute(
+      @connection_start,
+      %{system_time: System.system_time()},
+      %{module: module, uri: uri, pid: self()}
+    )
+  end
+
+  def connection_start(_module, _uri), do: :ok
+
+  @doc false
+  @spec connection_stop(module(), URI.t(), integer(), :ok | :error | :aborted, term()) :: :ok
+  def connection_stop(module, %URI{} = uri, duration, outcome, reason)
+      when is_atom(module) and is_integer(duration) and outcome in [:ok, :error, :aborted] do
+    :telemetry.execute(
+      @connection_stop,
+      %{duration: duration},
+      %{module: module, uri: uri, pid: self(), outcome: outcome, reason: reason}
+    )
+  end
+
+  def connection_stop(_module, _uri, _duration, _outcome, _reason), do: :ok
 
   @doc false
   @spec reconnect_scheduled(map(), non_neg_integer()) :: :ok
