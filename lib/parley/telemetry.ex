@@ -191,7 +191,28 @@ defmodule Parley.Telemetry do
   > it counts give-ups. A `last_value/2` would graph a flat line and
   > tell you nothing.
 
-  ## Example
+  ## Measurement units
+
+  | Measurement    | Unit             | Emitted on                                                      |
+  | -------------- | ---------------- | --------------------------------------------------------------- |
+  | `:size`        | bytes            | `[:parley, :frame, :received]`, `[:parley, :frame, :sent]`      |
+  | `:system_time` | native           | `[:parley, :connect, :start]`, `[:parley, :connection, :start]` |
+  | `:duration`    | native           | `[:parley, :connect, :stop]`, `[:parley, :connection, :stop]`   |
+  | `:delay`       | **milliseconds** | `[:parley, :reconnect, :scheduled]`                             |
+  | `:attempt`     | count            | `[:parley, :reconnect, :exhausted]`                             |
+
+  > #### `:delay` is milliseconds, not native {: .warning}
+  >
+  > `:duration` and `:system_time` are `:native` units (convert with
+  > `System.convert_time_unit/3`), but `:delay` is already in milliseconds.
+  > Do **not** configure it as native — a
+  > `summary("parley.reconnect.scheduled.delay", unit: {:native, :millisecond})`
+  > written by analogy with `:duration` silently rescales a value that is
+  > already in ms.
+
+  ## Attaching a handler
+
+  Attach to a single event:
 
       :telemetry.attach(
         "log-received-frames",
@@ -201,6 +222,118 @@ defmodule Parley.Telemetry do
         end,
         nil
       )
+
+  Or attach one handler to the whole feature with
+  `:telemetry.attach_many/4`:
+
+      events = [
+        [:parley, :frame, :received],
+        [:parley, :frame, :sent],
+        [:parley, :connect, :start],
+        [:parley, :connect, :stop],
+        [:parley, :connection, :start],
+        [:parley, :connection, :stop],
+        [:parley, :reconnect, :scheduled],
+        [:parley, :reconnect, :exhausted]
+      ]
+
+      :telemetry.attach_many("myclient-parley", events, &MyClient.Telemetry.handle/4, nil)
+
+  The handler must have a clause for **every** event it attaches:
+
+      defmodule MyClient.Telemetry do
+        require Logger
+
+        def handle([:parley, :frame, :received], %{size: size}, %{type: type}, _config),
+          do: Logger.debug("recv \#{type} \#{size}B")
+
+        def handle([:parley, :frame, :sent], %{size: size}, %{type: type}, _config),
+          do: Logger.debug("sent \#{type} \#{size}B")
+
+        def handle([:parley, :connect, :start], _measurements, %{attempt: attempt}, _config),
+          do: Logger.debug("connect start (attempt \#{attempt})")
+
+        def handle([:parley, :connect, :stop], %{duration: native}, %{outcome: outcome}, _config),
+          do: Logger.debug("connect \#{outcome} in \#{System.convert_time_unit(native, :native, :millisecond)}ms")
+
+        def handle([:parley, :connection, :start], _measurements, _metadata, _config),
+          do: Logger.debug("connection live")
+
+        def handle([:parley, :connection, :stop], %{duration: native}, %{outcome: outcome}, _config),
+          do: Logger.debug("connection ended \#{outcome} after \#{System.convert_time_unit(native, :native, :millisecond)}ms")
+
+        def handle([:parley, :reconnect, :scheduled], %{delay: delay}, %{attempt: attempt}, _config),
+          do: Logger.debug("retry \#{attempt} in \#{delay}ms")
+
+        def handle([:parley, :reconnect, :exhausted], %{attempt: attempt}, _metadata, _config),
+          do: Logger.warning("gave up after \#{attempt} attempts")
+      end
+
+  > #### One clause per attached event {: .warning}
+  >
+  > `:telemetry` **detaches a handler that raises** — for *all* the events it
+  > was attached to. A missing clause raises `FunctionClauseError` on the first
+  > matching emit, silently killing every metric above. Avoid a catch-all
+  > clause that could raise on data you did not expect.
+
+  ## Metric tags
+
+  Metadata drives correlation and tagging, but not every key is safe as a
+  [`Telemetry.Metrics`](https://hexdocs.pm/telemetry_metrics) tag — a
+  high-cardinality tag explodes metric storage.
+
+  | Metadata   | Safe to tag? | Why                                         |
+  | ---------- | ------------ | ------------------------------------------- |
+  | `:outcome` | yes          | small fixed set (`:ok`/`:error`/`:aborted`) |
+  | `:type`    | yes          | frame type atom                             |
+  | `:module`  | yes          | your client module                          |
+  | `:attempt` | yes          | small integer                               |
+  | `uri.host` | yes          | bounded set of hosts                        |
+  | `:reason`  | no           | unbounded error terms                       |
+  | `:uri`     | no           | a struct; tag `uri.host` instead            |
+  | `:pid`     | no           | unbounded and recycled                      |
+
+  `:pid` and `:uri` are in the metadata despite being unsafe to tag: `:module`
+  alone cannot tell apart a pool of connections to the same endpoint, and
+  `:pid` is the only key correlating a `:connect` span to its `:connection`
+  span to the frames on it. Use them in logs and traces, not as metric tags.
+
+  `uri.host` is not itself a metadata key — `Telemetry.Metrics` tags are flat
+  keys (`Map.take/2`), so derive `:host` from `:uri` with `:tag_values`:
+
+      summary("parley.connect.stop.duration",
+        tags: [:host],
+        tag_values: &Map.put(&1, :host, &1.uri.host))
+
+  And note `:attempt` is metadata on the `:connect` events and
+  `:reconnect, :scheduled` (so it can be a tag there), but a **measurement** on
+  `:reconnect, :exhausted` — where it is counted, not tagged.
+
+  ## `Telemetry.Metrics`
+
+  A representative `Telemetry.Metrics` config — the `counter/2` and `summary/2`
+  helpers come from `import Telemetry.Metrics`, and mind the units from the
+  table above:
+
+      import Telemetry.Metrics
+
+      [
+        # connect outcomes; the failure rate lives here, split by :outcome
+        counter("parley.connect.stop.duration", tags: [:module, :outcome]),
+        # connect latency, native -> ms
+        summary("parley.connect.stop.duration",
+          unit: {:native, :millisecond}, tags: [:module]),
+        # how long live connections last, native -> ms
+        summary("parley.connection.stop.duration",
+          unit: {:native, :millisecond}, tags: [:module, :outcome]),
+        # permanent give-ups (attempt is a measurement, always == max_retries)
+        counter("parley.reconnect.exhausted.attempt", tags: [:module]),
+        # backoff delay — already ms, no unit conversion
+        summary("parley.reconnect.scheduled.delay", tags: [:module]),
+        # bytes in / out
+        summary("parley.frame.received.size", tags: [:module, :type]),
+        summary("parley.frame.sent.size", tags: [:module, :type])
+      ]
   """
 
   @frame_received [:parley, :frame, :received]

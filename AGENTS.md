@@ -58,6 +58,7 @@ Options passed to `Parley.start_link/3` or `Parley.start/3`:
 ### Dependencies
 
 - `mint_web_socket` / `castore` (production)
+- `telemetry` (production) — lifecycle events, see `Parley.Telemetry`
 - `bandit` / `websock_adapter` (test only)
 - `credo` / `dialyxir` (dev/test only)
 
