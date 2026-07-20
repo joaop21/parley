@@ -98,8 +98,7 @@ defmodule ParleyTest do
     end
 
     test "postponed send_frame_async is dropped after connect timeout" do
-      {:ok, listen} = :gen_tcp.listen(0, [:binary, active: false, reuseaddr: true])
-      {:ok, port} = :inet.port(listen)
+      {port, listener} = EchoServer.black_hole_listen()
 
       {:ok, pid} =
         Client.start_link(%{test_pid: self()},
@@ -115,7 +114,7 @@ defmodule ParleyTest do
       assert_receive {:disconnected, :connect_timeout}, 1000
 
       Parley.disconnect(pid)
-      :gen_tcp.close(listen)
+      Process.exit(listener, :kill)
     end
   end
 
@@ -259,9 +258,7 @@ defmodule ParleyTest do
     end
 
     test "times out when server never completes the upgrade" do
-      # Start a TCP server that accepts connections but never responds
-      {:ok, listen} = :gen_tcp.listen(0, [:binary, active: false, reuseaddr: true])
-      {:ok, port} = :inet.port(listen)
+      {port, listener} = EchoServer.black_hole_listen()
 
       {:ok, pid} =
         Client.start_link(%{test_pid: self()},
@@ -274,13 +271,11 @@ defmodule ParleyTest do
       # Process stays alive in :disconnected state
       assert Process.alive?(pid)
       Parley.disconnect(pid)
-      :gen_tcp.close(listen)
+      Process.exit(listener, :kill)
     end
 
     test "postponed send_frame gets replied on connect timeout" do
-      # Start a TCP server that accepts connections but never responds
-      {:ok, listen} = :gen_tcp.listen(0, [:binary, active: false, reuseaddr: true])
-      {:ok, port} = :inet.port(listen)
+      {port, listener} = EchoServer.black_hole_listen()
 
       {:ok, pid} =
         Client.start_link(%{test_pid: self()},
@@ -293,7 +288,7 @@ defmodule ParleyTest do
       assert {:error, :disconnected} = Task.await(task, 1000)
 
       Parley.disconnect(pid)
-      :gen_tcp.close(listen)
+      Process.exit(listener, :kill)
     end
   end
 
@@ -982,9 +977,7 @@ defmodule ParleyTest do
 
   describe "disconnect during connecting" do
     test "disconnect while still in connecting state returns ok" do
-      # Start a TCP server that accepts connections but never responds
-      {:ok, listen} = :gen_tcp.listen(0, [:binary, active: false, reuseaddr: true])
-      {:ok, port} = :inet.port(listen)
+      {port, listener} = EchoServer.black_hole_listen()
 
       {:ok, pid} =
         Client.start_link(%{test_pid: self()},
@@ -998,7 +991,7 @@ defmodule ParleyTest do
 
       assert Process.alive?(pid)
       Parley.disconnect(pid)
-      :gen_tcp.close(listen)
+      Process.exit(listener, :kill)
     end
   end
 

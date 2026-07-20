@@ -16,6 +16,10 @@ defmodule Parley.Connection do
     :module,
     :user_state,
     :reconnect_timer,
+    # Monotonic time at which the open connect span started. Non-nil means a
+    # [:parley, :connect, :start] has fired without its matching :stop yet, so
+    # it doubles as the open-span flag. Nulled the moment the span is closed.
+    :connect_started_at,
     connect_timeout: @default_connect_timeout,
     headers: [],
     transport_opts: [],
@@ -75,6 +79,12 @@ defmodule Parley.Connection do
   end
 
   def disconnected(:enter, _old_state, data) do
+    # Safety net: any path that reached :disconnected with the span still open
+    # (a {:stop, ...} from a state-enter clause, an unhandled transition) closes
+    # it as :aborted here. Explicit close sites null the flag first, so this
+    # no-ops for them.
+    data = stop_connect_span(data, :aborted, data.disconnect_reason)
+
     if data.conn, do: Mint.HTTP.close(data.conn)
 
     data = %{
@@ -98,13 +108,30 @@ defmodule Parley.Connection do
     end
   end
 
+  # Opening the span and running do_connect are split across two internal
+  # events on purpose: the :start-carrying data must be committed to gen_statem
+  # *before* do_connect runs, so that a raise inside do_connect (e.g.
+  # ws_to_http_scheme/1 on a bad scheme, or Mint.HTTP.connect/4 on bad
+  # transport_opts) still leaves terminate/3 a non-nil connect_started_at to
+  # emit the balancing :stop against.
   def disconnected(:internal, :connect, data) do
+    {:keep_state, start_connect_span(data), [{:next_event, :internal, {:do_connect, :initial}}]}
+  end
+
+  # `origin` distinguishes the two do_connect callers so the error branch keeps
+  # its original behaviour: only the *initial* connect with reconnection disabled
+  # stops the process; a retry (which may be forced by handle_disconnect's
+  # {:reconnect, ...} even when the `reconnect` option is false) always falls
+  # through to :connect_failed.
+  def disconnected(:internal, {:do_connect, origin}, data) do
     case do_connect(data) do
       {:ok, conn, request_ref} ->
         {:next_state, :connecting, %{data | conn: conn, request_ref: request_ref}}
 
       {:error, reason, data} ->
-        if data.reconnect == false do
+        data = stop_connect_span(data, :error, reason)
+
+        if origin == :initial and data.reconnect == false do
           {:stop, {:error, reason}, data}
         else
           {:keep_state, %{data | disconnect_reason: {:error, reason}},
@@ -131,16 +158,11 @@ defmodule Parley.Connection do
     if data.reconnect_timer == nil do
       :keep_state_and_data
     else
-      data = %{data | reconnect_timer: nil}
-
-      case do_connect(data) do
-        {:ok, conn, request_ref} ->
-          {:next_state, :connecting, %{data | conn: conn, request_ref: request_ref}}
-
-        {:error, reason, data} ->
-          {:keep_state, %{data | disconnect_reason: {:error, reason}},
-           [{:next_event, :internal, :connect_failed}]}
-      end
+      # Open the span only once the stale-timer guard has passed, then hand off
+      # to the shared :do_connect handler (see disconnected(:internal, :connect,
+      # ...)) so the same commit-before-connect protection applies here.
+      data = start_connect_span(%{data | reconnect_timer: nil})
+      {:keep_state, data, [{:next_event, :internal, {:do_connect, :reconnect}}]}
     end
   end
 
@@ -197,6 +219,7 @@ defmodule Parley.Connection do
   end
 
   def connecting(:state_timeout, :connect_timeout, data) do
+    data = stop_connect_span(data, :error, :connect_timeout)
     {:next_state, :disconnected, %{data | disconnect_reason: :connect_timeout}}
   end
 
@@ -210,7 +233,8 @@ defmodule Parley.Connection do
         handle_upgrade_responses(%{data | conn: conn}, responses)
 
       {:error, conn, reason, _responses} ->
-        {:next_state, :disconnected, %{data | conn: conn, disconnect_reason: {:error, reason}}}
+        data = stop_connect_span(%{data | conn: conn}, :error, {:error, reason})
+        {:next_state, :disconnected, %{data | disconnect_reason: {:error, reason}}}
 
       :unknown ->
         case data.module.handle_info(message, data.user_state) do
@@ -222,8 +246,9 @@ defmodule Parley.Connection do
             {:keep_state, %{data | user_state: user_state}}
 
           {:disconnect, reason, user_state} ->
-            {:next_state, :disconnected,
-             %{data | user_state: user_state, disconnect_reason: reason}}
+            data = %{data | user_state: user_state, disconnect_reason: reason}
+            data = stop_connect_span(data, :aborted, reason)
+            {:next_state, :disconnected, data}
 
           {:stop, reason, user_state} ->
             if data.conn, do: Mint.HTTP.close(data.conn)
@@ -241,6 +266,7 @@ defmodule Parley.Connection do
   end
 
   def connecting({:call, from}, :disconnect, data) do
+    data = stop_connect_span(data, :aborted, :closed)
     {:next_state, :disconnected, %{data | disconnect_reason: :closed}, [{:reply, from, :ok}]}
   end
 
@@ -355,7 +381,48 @@ defmodule Parley.Connection do
     end
   end
 
+  # Last-resort span close. Runs on every stop, including crashes and shutdowns
+  # (a {:stop, ...} from a state-enter clause hands us the *new* state, so we
+  # never match on state). Emits :aborted only when the span is still open; a
+  # normal close already nulled the flag, making this a no-op.
+  @impl true
+  def terminate(reason, _state, %__MODULE__{} = data) do
+    stop_connect_span(data, :aborted, reason)
+    :ok
+  end
+
+  def terminate(_reason, _state, _data), do: :ok
+
   ## Private helpers
+
+  # Opens the connect span: records the monotonic start time (also the open-span
+  # flag) before emitting, so a slow handler can't inflate the measured
+  # duration, and reads the attempt index straight off the data.
+  defp start_connect_span(data) do
+    data = %{data | connect_started_at: System.monotonic_time()}
+    Parley.Telemetry.connect_start(data.module, data.uri, data.reconnect_attempt)
+    data
+  end
+
+  # Closes the connect span, nulling the flag. Idempotent: a nil flag means the
+  # span is already closed, so repeated closes (explicit site then safety net
+  # then terminate/3) collapse to a single :stop.
+  defp stop_connect_span(%__MODULE__{connect_started_at: nil} = data, _outcome, _reason), do: data
+
+  defp stop_connect_span(%__MODULE__{connect_started_at: started_at} = data, outcome, reason) do
+    duration = System.monotonic_time() - started_at
+
+    Parley.Telemetry.connect_stop(
+      data.module,
+      data.uri,
+      data.reconnect_attempt,
+      duration,
+      outcome,
+      reason
+    )
+
+    %{data | connect_started_at: nil}
+  end
 
   defp parse_reconnect(false), do: false
   defp parse_reconnect(true), do: @default_reconnect_opts
@@ -458,13 +525,18 @@ defmodule Parley.Connection do
       end)
 
     if done?(responses) do
+      # Emit the :stop inside each branch, not before the case: the {:ok, ...}
+      # branch closes the span as :ok while it is still the :connecting state
+      # (attempt not yet reset), and the {:error, ...} branch as :error.
       case Mint.WebSocket.new(data.conn, data.request_ref, data.status, data.resp_headers) do
         {:ok, conn, websocket} ->
-          {:next_state, :connected,
-           %{data | conn: conn, websocket: websocket, status: nil, resp_headers: []}}
+          data = %{data | conn: conn, websocket: websocket, status: nil, resp_headers: []}
+          data = stop_connect_span(data, :ok, nil)
+          {:next_state, :connected, data}
 
         {:error, conn, reason} ->
-          {:next_state, :disconnected, %{data | conn: conn, disconnect_reason: {:error, reason}}}
+          data = stop_connect_span(%{data | conn: conn}, :error, {:error, reason})
+          {:next_state, :disconnected, %{data | disconnect_reason: {:error, reason}}}
       end
     else
       {:keep_state, data}
@@ -615,6 +687,7 @@ defmodule Parley.Connection do
       {:ok, websocket, encoded} ->
         case Mint.WebSocket.stream_request_body(data.conn, data.request_ref, encoded) do
           {:ok, conn} ->
+            Parley.Telemetry.frame_sent(frame, data.module, data.uri)
             {:ok, %{data | conn: conn, websocket: websocket}}
 
           {:error, conn, reason} ->
